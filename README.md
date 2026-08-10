@@ -41,6 +41,7 @@ The Continuity drawer also permits private-state inspection, reprocessing the la
 - Version 1.0.4 places that operator user scope in `GenerationRequestDTO.userId`, matching the Lumiverse 1.1 runtime contract for direct generation.
 - Version 1.0.5 uses Lumiverse's normalized top-level tool schema for Claude connections, retries one schema-rejected tracker result, and reports the exact rejected field without exposing private state.
 - Version 1.0.6 raises the fresh-install tracker output ceiling default from 1,200 to 2,000 tokens for more reliable complete JSON from local and long-haul trackers.
+- Version 1.0.7 adds visible started, completed, no-chat, and tracker-error feedback for Reprocess Latest Turn and migration actions.
 
 ## Development
 

@@ -579,10 +579,68 @@ spindle.onFrontendMessage(async (payload, userId) => {
     if (chatId) scheduleReconcile(chatId, {}, userId);
   } else if (type === "continuity_reprocess") {
     const chatId = adoptActiveChat(payload.chatId, userId);
-    if (chatId) scheduleReconcile(chatId, { forceLatest: true }, userId);
+    if (!chatId) {
+      sendFrontend({
+        type: "continuity_action_result",
+        action: "reprocess",
+        ok: false,
+        message: "Open a Date Simulator chat before reprocessing.",
+      }, userId);
+      return;
+    }
+    sendFrontend({
+      type: "continuity_action_started",
+      action: "reprocess",
+      chatId,
+      message: "Reprocessing the latest eligible immersive turn…",
+    }, userId);
+    await scheduleReconcile(chatId, { forceLatest: true }, userId);
+    const status = await statusPayload(chatId, { includePrivate: Boolean(payload.includePrivate) });
+    const ok = !status.lastError && !status.migrationRequired;
+    sendFrontend({
+      type: "continuity_action_result",
+      action: "reprocess",
+      chatId,
+      ok,
+      message: ok
+        ? `Reprocess complete at revision ${status.revision || 0}.`
+        : status.lastError
+          ? `Reprocess finished with a tracker error: ${status.lastError}`
+          : "Reprocess cannot continue until this chat is migrated.",
+      status,
+    }, userId);
   } else if (type === "continuity_migrate") {
     const chatId = adoptActiveChat(payload.chatId, userId);
-    if (chatId) scheduleReconcile(chatId, { allowMigration: true }, userId);
+    if (!chatId) {
+      sendFrontend({
+        type: "continuity_action_result",
+        action: "migrate",
+        ok: false,
+        message: "Open a Date Simulator chat before migrating.",
+      }, userId);
+      return;
+    }
+    sendFrontend({
+      type: "continuity_action_started",
+      action: "migrate",
+      chatId,
+      message: "Migrating the current chat…",
+    }, userId);
+    await scheduleReconcile(chatId, { allowMigration: true }, userId);
+    const status = await statusPayload(chatId, { includePrivate: Boolean(payload.includePrivate) });
+    const ok = !status.lastError && !status.migrationRequired;
+    sendFrontend({
+      type: "continuity_action_result",
+      action: "migrate",
+      chatId,
+      ok,
+      message: ok
+        ? `Migration complete at revision ${status.revision || 0}.`
+        : status.lastError
+          ? `Migration finished with an error: ${status.lastError}`
+          : "Migration is still required.",
+      status,
+    }, userId);
   }
 });
 

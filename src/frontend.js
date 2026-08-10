@@ -35,6 +35,7 @@ export function setup(ctx) {
     .dsc-field select, .dsc-field input { color: var(--lumiverse-text); background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border); border-radius: 8px; padding: 8px; }
     .dsc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .dsc-button { color: var(--lumiverse-accent-fg); background: var(--lumiverse-accent); border: 0; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+    .dsc-button:disabled { opacity: .55; cursor: wait; }
     .dsc-hint { color: var(--lumiverse-text-muted); font-size: .76rem; overflow-wrap: anywhere; }
     .dsc-hint[data-level="amber"] { color: #f59e0b; }
     .dsc-state { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow: auto; font-size: .78rem; color: var(--lumiverse-text-muted); }
@@ -104,6 +105,35 @@ export function setup(ctx) {
 
   const actions = document.createElement("div");
   actions.className = "dsc-actions";
+  const actionStatus = document.createElement("div");
+  actionStatus.className = "dsc-hint";
+  actionStatus.textContent = "Reprocess and migration progress will appear here.";
+  const reprocessButton = createButton("Reprocess Latest Turn", () => {
+    if (!activeChatId) {
+      setActionFeedback("Open a Date Simulator chat before reprocessing.", "amber");
+      requestStatus();
+      return;
+    }
+    setActionPending("Reprocessing the latest eligible immersive turn…");
+    ctx.sendToBackend({
+      type: "continuity_reprocess",
+      chatId: activeChatId,
+      includePrivate: showPrivate.checked,
+    });
+  });
+  const migrateButton = createButton("Migrate Current Chat", () => {
+    if (!activeChatId) {
+      setActionFeedback("Open a Date Simulator chat before migrating.", "amber");
+      requestStatus();
+      return;
+    }
+    setActionPending("Migrating the current chat…");
+    ctx.sendToBackend({
+      type: "continuity_migrate",
+      chatId: activeChatId,
+      includePrivate: showPrivate.checked,
+    });
+  });
   actions.append(
     createButton("Save Settings", () => {
       ctx.sendToBackend({
@@ -123,16 +153,29 @@ export function setup(ctx) {
       renderConnections();
       ctx.sendToBackend({ type: "continuity_get_connections" });
     }),
-    createButton("Reprocess Latest Turn", () => {
-      ctx.sendToBackend({ type: "continuity_reprocess", chatId: activeChatId });
-    }),
-    createButton("Migrate Current Chat", () => {
-      ctx.sendToBackend({ type: "continuity_migrate", chatId: activeChatId });
-    }),
+    reprocessButton,
+    migrateButton,
   );
 
-  panel.append(statusCard, configCard, actions, stateCard);
+  panel.append(statusCard, configCard, actions, actionStatus, stateCard);
   tab.root.appendChild(panel);
+
+  function setActionFeedback(message, level = "green") {
+    actionStatus.dataset.level = level;
+    actionStatus.textContent = message;
+  }
+
+  function setActionPending(message) {
+    reprocessButton.disabled = true;
+    migrateButton.disabled = true;
+    setActionFeedback(message, "amber");
+  }
+
+  function finishAction(message, ok) {
+    reprocessButton.disabled = false;
+    migrateButton.disabled = false;
+    setActionFeedback(message, ok ? "green" : "amber");
+  }
 
   function requestStatus() {
     ctx.sendToBackend({
@@ -233,6 +276,13 @@ export function setup(ctx) {
       renderConnections();
     }
     if (payload?.type === "continuity_config_saved") requestStatus();
+    if (payload?.type === "continuity_action_started") {
+      setActionPending(payload.message || "Continuity action started…");
+    }
+    if (payload?.type === "continuity_action_result") {
+      finishAction(payload.message || "Continuity action finished.", payload.ok === true);
+      if (payload.status) renderStatus(payload.status);
+    }
   }));
 
   cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {

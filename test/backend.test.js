@@ -113,6 +113,18 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.ok(generatedUsers.length > 0);
   assert.ok(generatedUsers.every((userId) => userId === "user-1"));
 
+  await frontendHandler({
+    type: "continuity_reprocess",
+    chatId: "chat-1",
+    includePrivate: true,
+  }, "user-1");
+  assert.ok(frontendMessages.some(
+    (payload) => payload.type === "continuity_action_started" && payload.action === "reprocess",
+  ));
+  assert.ok(frontendMessages.some(
+    (payload) => payload.type === "continuity_action_result" && payload.action === "reprocess" && payload.ok,
+  ));
+
   const assembled = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
     messages[1],
