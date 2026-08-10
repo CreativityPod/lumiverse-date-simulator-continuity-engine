@@ -32,7 +32,10 @@ Hard rules:
 - NPCS includes named or plausibly recurring NPCs only. Preserve active recurring NPCs. Do not add incidental staff or passersby.
 - OBJECTIVES contains at most three immediate plans, commitments, pressures, or intended next steps. Never infer an objective for the man unless he stated it.
 - If no relationship change occurred, preserve the prior latestChange and sourceMessageId exactly. If a material relationship change occurred, write one concise change and set sourceMessageId to the supplied assistant message id.
-- Return only the JSON object required by the schema. No markdown or commentary.`;
+- Return only the JSON object required by the schema. No markdown or commentary.
+
+Required JSON shape (every shown property is required; npcs and objectives may be empty arrays):
+{"schemaVersion":1,"scene":{"date":"string","time":"string","weather":"string","location":"string","immediateContext":"string","womanCurrent":{"hairAndGrooming":"string","dress":"string","physicalState":"string","mentalState":"string"},"manVisible":"string","spatial":"string"},"arc":{"npcs":[{"name":"string","role":"string","relationship":"string","currentStatus":"string","immediateObjective":"string"}],"relationship":{"establishedStatus":"string","womanPosture":"string","activeBoundaryOrConcern":"string","latestChange":"string or empty","sourceMessageId":"matching id or empty"},"objectives":[{"owner":"string","objective":"string","status":"string"}]}}`;
 
 function trackerUserPrompt({ caseText, previousState, userText, assistantText, sourceMessageId }) {
   return `ASSISTANT MESSAGE ID
@@ -92,7 +95,14 @@ function extractJson(text) {
 
 function resolveOutputMode(connection, requestedMode = DEFAULT_TRACKER_OUTPUT_MODE) {
   if (TRACKER_OUTPUT_MODES.includes(requestedMode) && requestedMode !== "auto") return requestedMode;
-  const provider = String(connection?.provider ?? "").toLowerCase();
+  const provider = [
+    connection?.provider,
+    connection?.type,
+    connection?.kind,
+    connection?.protocol,
+    connection?.apiType,
+    connection?.format,
+  ].map((value) => String(value ?? "")).join(" ").toLowerCase();
   if (provider.includes("google") || provider.includes("gemini")) return "google";
   if (provider.includes("anthropic") || provider.includes("claude")) return "anthropic";
   if (
@@ -265,6 +275,7 @@ export async function runMigrationTracker(spindleApi, input, config, userId) {
 }
 
 export const trackerTest = Object.freeze({
+  systemPrompt: TRACKER_SYSTEM_PROMPT,
   extractJson,
   generationParameters,
   generationTools,

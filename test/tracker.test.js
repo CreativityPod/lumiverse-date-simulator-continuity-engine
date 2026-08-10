@@ -20,6 +20,7 @@ test("tracker prompt contains the source id and agency constraints", () => {
   });
   assert.match(prompt, /a1/);
   assert.match(prompt, /She waves back/);
+  assert.match(trackerTest.systemPrompt, /"objectives":\[\{"owner":"string","objective":"string","status":"string"\}\]/);
 });
 
 test("tracker timeout accepts five minutes and clamps larger values", () => {
@@ -43,6 +44,10 @@ test("uses native structured output only for recognized providers", () => {
   );
   assert.equal(trackerTest.generationTools({ provider: "openai" }), undefined);
   assert.equal(trackerTest.resolveOutputMode({ provider: "custom" }, "auto"), "plain");
+  assert.equal(
+    trackerTest.resolveOutputMode({ provider: "custom", type: "openai-compatible" }, "auto"),
+    "openai",
+  );
   assert.equal(trackerTest.resolveOutputMode({ provider: "custom" }, "openai"), "openai");
   assert.ok(trackerTest.generationParameters({ provider: "custom" }, "openai").response_format);
   assert.equal(trackerTest.generationTools({ provider: "openai" }, "anthropic")[0].name, "record_date_simulator_state");

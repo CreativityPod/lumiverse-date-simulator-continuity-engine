@@ -31,6 +31,8 @@ check(backend.includes("registerInterceptor"), "Backend registers an interceptor
 check(backend.includes("runTracker"), "Backend contains tracker generation");
 check(frontend.includes("export function setup"), "Frontend exports setup");
 check(frontend.includes("ds-tracker-status"), "Frontend updates the profile status badge");
+check(frontend.includes("-webkit-appearance: menulist"), "Frontend preserves visible dropdown affordances");
+check(frontend.includes("var(--lumiverse-accent, #2563eb)"), "Frontend buttons have a host-independent color fallback");
 
 if (failures.length) {
   console.error(`Package validation failed:\n- ${failures.join("\n- ")}`);

@@ -28,14 +28,18 @@ export function setup(ctx) {
 
   const removeStyle = ctx.dom.addStyle(`
     .dsc-panel { padding: 14px; color: var(--lumiverse-text); display: grid; gap: 12px; }
-    .dsc-card { border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius); padding: 12px; background: var(--lumiverse-fill-subtle); }
+    .dsc-card { border: 1px solid var(--lumiverse-border, #475569); border-radius: var(--lumiverse-radius, 10px); padding: 12px; background: var(--lumiverse-fill-subtle, rgba(15,23,42,.45)); }
     .dsc-status { font-weight: 700; }
     .dsc-status[data-level="green"] { color: #22c55e; }
     .dsc-status[data-level="amber"] { color: #f59e0b; }
     .dsc-field { display: grid; gap: 5px; font-size: .86rem; }
-    .dsc-field select, .dsc-field input { color: var(--lumiverse-text); background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border); border-radius: 8px; padding: 8px; }
+    .dsc-field select, .dsc-field input { color: var(--lumiverse-text, #e2e8f0) !important; background-color: var(--lumiverse-fill, #1e293b) !important; border: 1px solid var(--lumiverse-border, #64748b) !important; border-radius: 8px; padding: 8px; min-height: 38px; }
+    .dsc-field select { appearance: auto !important; -webkit-appearance: menulist !important; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(148,163,184,.08); }
+    .dsc-field select:focus, .dsc-field input:focus { outline: 2px solid var(--lumiverse-accent, #38bdf8); outline-offset: 1px; }
     .dsc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    .dsc-button { color: var(--lumiverse-accent-fg); background: var(--lumiverse-accent); border: 0; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+    .dsc-button { appearance: button !important; color: var(--lumiverse-accent-fg, #ffffff) !important; background: var(--lumiverse-accent, #2563eb) !important; border: 1px solid var(--lumiverse-accent, #60a5fa) !important; border-radius: 8px; padding: 8px 11px; min-height: 36px; font-weight: 700; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.28); }
+    .dsc-button:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); }
+    .dsc-button:active:not(:disabled) { filter: brightness(.92); transform: translateY(0); }
     .dsc-button:disabled { opacity: .55; cursor: wait; }
     .dsc-hint { color: var(--lumiverse-text-muted); font-size: .76rem; overflow-wrap: anywhere; }
     .dsc-hint[data-level="amber"] { color: #f59e0b; }

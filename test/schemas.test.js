@@ -84,11 +84,13 @@ test("preserves the prior relationship when source linkage is unsupported", () =
   assert.match(recovered.warnings.join("; "), /source linkage was invalid/);
 });
 
-test("provider schema carries the same objective string bounds as runtime validation", () => {
+test("provider schema avoids regex and bounded-repetition grammar traps", () => {
   const objective = TRACKER_JSON_SCHEMA.properties.arc.properties.objectives.items.properties;
-  assert.deepEqual(objective.owner, { type: "string", pattern: "^[\\s\\S]{1,500}$" });
-  assert.deepEqual(objective.objective, { type: "string", pattern: "^[\\s\\S]{1,500}$" });
-  assert.deepEqual(objective.status, { type: "string", pattern: "^[\\s\\S]{1,500}$" });
+  assert.deepEqual(objective.owner, { type: "string" });
+  assert.deepEqual(objective.objective, { type: "string" });
+  assert.deepEqual(objective.status, { type: "string" });
+  const encoded = JSON.stringify(TRACKER_JSON_SCHEMA);
+  assert.doesNotMatch(encoded, /"pattern"|"minLength"|"maxLength"/);
 });
 
 test("allows a prior relationship change to persist on a no-change turn", () => {

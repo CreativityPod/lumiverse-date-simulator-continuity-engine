@@ -51,11 +51,12 @@ const RELATIONSHIP_KEYS = [
 ];
 const OBJECTIVE_KEYS = ["owner", "objective", "status"];
 
-function boundedStringSchema(maximumLength, { allowEmpty = false } = {}) {
-  return {
-    type: "string",
-    pattern: `^[\\s\\S]{${allowEmpty ? 0 : 1},${maximumLength}}$`,
-  };
+function providerStringSchema() {
+  // Keep the provider grammar deliberately structural. llama.cpp's
+  // JSON-schema converter cannot parse PCRE shorthands such as \s, and large
+  // bounded repetitions can also exceed its grammar limits. Exact lengths,
+  // emptiness, and managed-markup rules are enforced locally before commit.
+  return { type: "string" };
 }
 
 function isPlainObject(value) {
@@ -430,21 +431,21 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
       type: "object",
       additionalProperties: false,
       properties: {
-        date: boundedStringSchema(700),
-        time: boundedStringSchema(700),
-        weather: boundedStringSchema(700),
-        location: boundedStringSchema(700),
-        immediateContext: boundedStringSchema(700),
+        date: providerStringSchema(),
+        time: providerStringSchema(),
+        weather: providerStringSchema(),
+        location: providerStringSchema(),
+        immediateContext: providerStringSchema(),
         womanCurrent: {
           type: "object",
           additionalProperties: false,
           properties: Object.fromEntries(
-            WOMAN_KEYS.map((key) => [key, boundedStringSchema(1_000)]),
+            WOMAN_KEYS.map((key) => [key, providerStringSchema()]),
           ),
           required: WOMAN_KEYS,
         },
-        manVisible: boundedStringSchema(1_000),
-        spatial: boundedStringSchema(1_200),
+        manVisible: providerStringSchema(),
+        spatial: providerStringSchema(),
       },
       required: SCENE_KEYS,
     },
@@ -461,7 +462,7 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
             properties: Object.fromEntries(
               NPC_KEYS.map((key) => [
                 key,
-                boundedStringSchema(key === "name" ? 120 : 500),
+                providerStringSchema(),
               ]),
             ),
             required: NPC_KEYS,
@@ -473,9 +474,7 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
           properties: Object.fromEntries(
             RELATIONSHIP_KEYS.map((key) => [
               key,
-              boundedStringSchema(1_000, {
-                allowEmpty: key === "latestChange" || key === "sourceMessageId",
-              }),
+              providerStringSchema(),
             ]),
           ),
           required: RELATIONSHIP_KEYS,
@@ -487,7 +486,7 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
             type: "object",
             additionalProperties: false,
             properties: Object.fromEntries(
-              OBJECTIVE_KEYS.map((key) => [key, boundedStringSchema(500)]),
+              OBJECTIVE_KEYS.map((key) => [key, providerStringSchema()]),
             ),
             required: OBJECTIVE_KEYS,
           },

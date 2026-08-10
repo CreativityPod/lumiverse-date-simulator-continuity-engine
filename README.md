@@ -39,6 +39,8 @@ Tracker output is normalized conservatively and then passed through the strict v
 
 Structured-output modes are **Auto**, **OpenAI-compatible JSON Schema**, **Anthropic Tool**, and **Plain JSON**. Auto uses Lumiverse connection metadata; it does not probe the provider with an extra generation.
 
+For LM Studio, the extension's **OpenAI-compatible JSON Schema** mode supplies `response_format` on the API request and does not require the Structured Output control in LM Studio's chat UI to be enabled. The provider-facing schema is intentionally structural and regex-free for llama.cpp grammar compatibility; exact text limits and markup rejection remain enforced locally before state is committed.
+
 The Continuity drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, and explicit v1.3.1 migration.
 
 ## Troubleshooting
@@ -53,6 +55,7 @@ The Continuity drawer also permits private-state inspection, reprocessing the la
 - Version 1.0.6 raises the fresh-install tracker output ceiling default from 1,200 to 2,000 tokens for more reliable complete JSON from local and long-haul trackers.
 - Version 1.0.7 adds visible started, completed, no-chat, and tracker-error feedback for Reprocess Latest Turn and migration actions.
 - Version 1.0.8 saves stable profiles before tracker generation, adds a strict next-turn checkpoint barrier, supports explicit output modes, aligns provider constraints with runtime validation, reports exact field diagnostics, and conservatively recovers valid state sections without spending a repair call on a malformed optional objective.
+- Version 1.0.9 removes PCRE shorthand patterns that llama.cpp could not compile into a grammar, adds the complete expected JSON shape to the normal tracker prompt, improves Auto detection for custom OpenAI-compatible connections, and gives drawer dropdowns and buttons explicit Lumiverse 1.1-compatible affordances.
 
 ## Development
 
