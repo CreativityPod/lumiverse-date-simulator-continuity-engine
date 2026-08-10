@@ -35,6 +35,45 @@ test("uses native structured output only for recognized providers", () => {
     trackerTest.generationParameters({ provider: "anthropic" }).tool_choice.name,
     "record_date_simulator_state",
   );
+  assert.deepEqual(
+    trackerTest.generationTools({ provider: "anthropic" })[0].parameters.required,
+    ["schemaVersion", "scene", "arc"],
+  );
+  assert.equal(trackerTest.generationTools({ provider: "openai" }), undefined);
+});
+
+test("retries one rejected tracker response with the validation reason", async () => {
+  const state = cloneEmptyState();
+  const requests = [];
+  const spindleApi = {
+    connections: {
+      list: async () => [{ id: "custom", provider: "custom", is_default: true }],
+      get: async () => null,
+    },
+    generate: {
+      quiet: async (input) => {
+        requests.push(input);
+        return requests.length === 1
+          ? { content: '{"schemaVersion":1}', finish_reason: "stop" }
+          : { content: JSON.stringify(state), finish_reason: "stop" };
+      },
+    },
+  };
+  const result = await runTracker(
+    spindleApi,
+    {
+      caseText: "CASE",
+      previousState: null,
+      userText: "Hello.",
+      assistantText: "She says hello.",
+      sourceMessageId: "a1",
+    },
+    { connectionId: "", maxTokens: 800, timeoutMs: 5_000 },
+    "user-1",
+  );
+  assert.deepEqual(result, state);
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].messages.at(-1).content, /root keys must be exactly/);
 });
 
 test("accepts a forced Anthropic tracker tool call", async () => {
@@ -58,6 +97,8 @@ test("accepts a forced Anthropic tracker tool call", async () => {
         generatedUsers.push(input.userId);
         assert.equal(input.type, "quiet");
         assert.equal(input.parameters.tool_choice.name, "record_date_simulator_state");
+        assert.equal(input.tools[0].name, "record_date_simulator_state");
+        assert.equal(input.tools[0].parameters.type, "object");
         assert.match(input.messages[0].content, /manVisible contains only/);
         return {
           content: "",

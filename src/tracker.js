@@ -2,7 +2,7 @@ import {
   TRACKER_JSON_SCHEMA,
   TRACKER_SCHEMA_VERSION,
   cloneEmptyState,
-  validateTrackerState,
+  validateTrackerStateDetailed,
 } from "./schemas.js";
 
 export const DEFAULT_TRACKER_TIMEOUT_MS = 45_000;
@@ -112,17 +112,22 @@ function generationParameters(connection) {
   if (provider.includes("anthropic") || provider.includes("claude")) {
     return {
       ...base,
-      tools: [
-        {
-          name: "record_date_simulator_state",
-          description: "Return the complete validated Date Simulator continuity state.",
-          input_schema: TRACKER_JSON_SCHEMA,
-        },
-      ],
       tool_choice: { type: "tool", name: "record_date_simulator_state" },
     };
   }
   return base;
+}
+
+function generationTools(connection) {
+  const provider = String(connection?.provider ?? "").toLowerCase();
+  if (!provider.includes("anthropic") && !provider.includes("claude")) return undefined;
+  return [
+    {
+      name: "record_date_simulator_state",
+      description: "Return the complete validated Date Simulator continuity state.",
+      parameters: TRACKER_JSON_SCHEMA,
+    },
+  ];
 }
 
 async function resolveConnection(spindleApi, connectionId, userId) {
@@ -143,35 +148,58 @@ async function resolveConnection(spindleApi, connectionId, userId) {
 
 async function generateCandidate(spindleApi, messages, config, sourceMessageId, previousState, userId) {
   const connection = await resolveConnection(spindleApi, config.connectionId, userId);
-  const input = {
-    type: "quiet",
-    messages,
-    parameters: {
-      ...generationParameters(connection),
-      max_tokens: Math.max(400, Math.min(2_000, Number(config.maxTokens) || 1_200)),
-    },
-    reasoning: { source: "off" },
-    signal: AbortSignal.timeout(normalizeTrackerTimeoutMs(config.timeoutMs)),
-  };
-  // Lumiverse scopes direct generation through GenerationRequestDTO.userId.
-  // Connection profile methods instead accept userId as a positional argument.
-  if (userId) input.userId = userId;
-  if (config.connectionId) input.connection_id = config.connectionId;
-
-  const response = await spindleApi.generate.quiet(input);
-  const toolState = response?.tool_calls?.find(
-    (call) => call?.name === "record_date_simulator_state",
-  )?.args;
-  const parsed = toolState && typeof toolState === "object"
-    ? toolState
-    : extractJson(response?.content);
   const allowedSourceMessageIds = [
     sourceMessageId,
     previousState?.arc?.relationship?.sourceMessageId,
   ].filter(Boolean);
-  const validated = validateTrackerState(parsed, { allowedSourceMessageIds });
-  if (!validated) throw new Error("Tracker returned malformed or unsupported state.");
-  return validated;
+  const makeRequest = (attemptMessages) => {
+    const input = {
+      type: "quiet",
+      messages: attemptMessages,
+      parameters: {
+        ...generationParameters(connection),
+        max_tokens: Math.max(400, Math.min(2_000, Number(config.maxTokens) || 1_200)),
+      },
+      reasoning: { source: "off" },
+      signal: AbortSignal.timeout(normalizeTrackerTimeoutMs(config.timeoutMs)),
+    };
+    const tools = generationTools(connection);
+    if (tools) input.tools = tools;
+    // Lumiverse scopes direct generation through GenerationRequestDTO.userId.
+    // Connection profile methods instead accept userId as a positional argument.
+    if (userId) input.userId = userId;
+    if (config.connectionId) input.connection_id = config.connectionId;
+    return input;
+  };
+  const validateResponse = (response) => {
+    const toolState = response?.tool_calls?.find(
+      (call) => call?.name === "record_date_simulator_state",
+    )?.args;
+    const parsed = toolState && typeof toolState === "object"
+      ? toolState
+      : extractJson(toolState ?? response?.content);
+    return validateTrackerStateDetailed(parsed, { allowedSourceMessageIds });
+  };
+
+  let response = await spindleApi.generate.quiet(makeRequest(messages));
+  let validation = validateResponse(response);
+  if (!validation.state) {
+    const repairPrompt = {
+      role: "user",
+      content: `Your prior tracker result was rejected because ${validation.error}. Retry once. Return the complete compact schema object, include every required field, preserve canonical facts, use Unknown rather than guessing, and return no prose or markdown.`,
+    };
+    response = await spindleApi.generate.quiet(makeRequest([...messages, repairPrompt]));
+    validation = validateResponse(response);
+  }
+  if (!validation.state) {
+    const finishReason = String(response?.finish_reason ?? "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const contentLength = String(response?.content ?? "").length;
+    const toolCallCount = Array.isArray(response?.tool_calls) ? response.tool_calls.length : 0;
+    throw new Error(
+      `Tracker state rejected after repair: ${validation.error}; finish=${finishReason}; contentChars=${contentLength}; toolCalls=${toolCallCount}.`,
+    );
+  }
+  return validation.state;
 }
 
 export async function runTracker(spindleApi, input, config, userId) {
@@ -205,6 +233,7 @@ export async function runMigrationTracker(spindleApi, input, config, userId) {
 export const trackerTest = Object.freeze({
   extractJson,
   generationParameters,
+  generationTools,
   trackerUserPrompt,
   migrationUserPrompt,
   normalizeTrackerTimeoutMs,

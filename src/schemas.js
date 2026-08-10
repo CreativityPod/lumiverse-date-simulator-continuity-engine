@@ -113,7 +113,8 @@ export function cloneEmptyState() {
   };
 }
 
-export function validateTrackerState(candidate, options = {}) {
+export function validateTrackerStateDetailed(candidate, options = {}) {
+  const fail = (error) => ({ state: null, error });
   const expectedSourceMessageId = String(options.sourceMessageId ?? "");
   const allowedSourceMessageIds = new Set(
     (options.allowedSourceMessageIds ?? [])
@@ -121,58 +122,87 @@ export function validateTrackerState(candidate, options = {}) {
       .filter(Boolean),
   );
   if (expectedSourceMessageId) allowedSourceMessageIds.add(expectedSourceMessageId);
-  if (!hasExactKeys(candidate, ROOT_KEYS)) return null;
-  if (candidate.schemaVersion !== TRACKER_SCHEMA_VERSION) return null;
-  if (!hasExactKeys(candidate.scene, SCENE_KEYS)) return null;
-  if (!hasExactKeys(candidate.scene.womanCurrent, WOMAN_KEYS)) return null;
-  if (!hasExactKeys(candidate.arc, ARC_KEYS)) return null;
-  if (!hasExactKeys(candidate.arc.relationship, RELATIONSHIP_KEYS)) return null;
+  if (!isPlainObject(candidate)) return fail("response did not contain a JSON object");
+  if (!hasExactKeys(candidate, ROOT_KEYS)) {
+    return fail(`root keys must be exactly: ${ROOT_KEYS.join(", ")}`);
+  }
+  if (candidate.schemaVersion !== TRACKER_SCHEMA_VERSION) {
+    return fail(`schemaVersion must be the number ${TRACKER_SCHEMA_VERSION}`);
+  }
+  if (!hasExactKeys(candidate.scene, SCENE_KEYS)) {
+    return fail(`scene keys must be exactly: ${SCENE_KEYS.join(", ")}`);
+  }
+  if (!hasExactKeys(candidate.scene.womanCurrent, WOMAN_KEYS)) {
+    return fail(`scene.womanCurrent keys must be exactly: ${WOMAN_KEYS.join(", ")}`);
+  }
+  if (!hasExactKeys(candidate.arc, ARC_KEYS)) {
+    return fail(`arc keys must be exactly: ${ARC_KEYS.join(", ")}`);
+  }
+  if (!hasExactKeys(candidate.arc.relationship, RELATIONSHIP_KEYS)) {
+    return fail(`arc.relationship keys must be exactly: ${RELATIONSHIP_KEYS.join(", ")}`);
+  }
 
   const normalized = cloneEmptyState();
   for (const key of SCENE_KEYS.filter((key) => key !== "womanCurrent")) {
     const maximumLength = key === "spatial" ? 1_200 : key === "manVisible" ? 1_000 : 700;
     const cleaned = cleanText(candidate.scene[key], maximumLength);
-    if (cleaned === null) return null;
+    if (cleaned === null) return fail(`scene.${key} must be a nonempty bounded string`);
     normalized.scene[key] = cleaned;
   }
   for (const key of WOMAN_KEYS) {
     const cleaned = cleanText(candidate.scene.womanCurrent[key], 1_000);
-    if (cleaned === null) return null;
+    if (cleaned === null) {
+      return fail(`scene.womanCurrent.${key} must be a nonempty bounded string`);
+    }
     normalized.scene.womanCurrent[key] = cleaned;
   }
 
-  if (!Array.isArray(candidate.arc.npcs) || candidate.arc.npcs.length > 24) return null;
-  for (const npc of candidate.arc.npcs) {
+  if (!Array.isArray(candidate.arc.npcs) || candidate.arc.npcs.length > 24) {
+    return fail("arc.npcs must be an array containing at most 24 entries");
+  }
+  for (let index = 0; index < candidate.arc.npcs.length; index += 1) {
+    const npc = candidate.arc.npcs[index];
     const normalizedNpc = normalizeNpc(npc);
-    if (!normalizedNpc) return null;
+    if (!normalizedNpc) return fail(`arc.npcs[${index}] has missing, extra, empty, or oversized fields`);
     normalized.arc.npcs.push(normalizedNpc);
   }
 
   for (const key of RELATIONSHIP_KEYS) {
     const allowEmpty = key === "latestChange" || key === "sourceMessageId";
     const cleaned = cleanText(candidate.arc.relationship[key], 1_000, { allowEmpty });
-    if (cleaned === null) return null;
+    if (cleaned === null) {
+      return fail(`arc.relationship.${key} must be a bounded string`);
+    }
     normalized.arc.relationship[key] = cleaned;
   }
   const latestChange = normalized.arc.relationship.latestChange;
   const sourceMessageId = normalized.arc.relationship.sourceMessageId;
   if (latestChange && allowedSourceMessageIds.size > 0 && !allowedSourceMessageIds.has(sourceMessageId)) {
-    return null;
+    return fail("arc.relationship.sourceMessageId does not match the current or prior change source");
   }
-  if (!latestChange && sourceMessageId) return null;
+  if (!latestChange && sourceMessageId) {
+    return fail("arc.relationship.sourceMessageId must be empty when latestChange is empty");
+  }
 
   if (!Array.isArray(candidate.arc.objectives) || candidate.arc.objectives.length > 3) {
-    return null;
+    return fail("arc.objectives must be an array containing at most 3 entries");
   }
-  for (const objective of candidate.arc.objectives) {
+  for (let index = 0; index < candidate.arc.objectives.length; index += 1) {
+    const objective = candidate.arc.objectives[index];
     const normalizedObjective = normalizeObjective(objective);
-    if (!normalizedObjective) return null;
+    if (!normalizedObjective) {
+      return fail(`arc.objectives[${index}] has missing, extra, empty, or oversized fields`);
+    }
     normalized.arc.objectives.push(normalizedObjective);
   }
 
   const encoded = JSON.stringify(normalized);
-  if (encoded.length > 24_000) return null;
-  return normalized;
+  if (encoded.length > 24_000) return fail("encoded tracker state exceeds 24,000 characters");
+  return { state: normalized, error: "" };
+}
+
+export function validateTrackerState(candidate, options = {}) {
+  return validateTrackerStateDetailed(candidate, options).state;
 }
 
 export const TRACKER_JSON_SCHEMA = Object.freeze({

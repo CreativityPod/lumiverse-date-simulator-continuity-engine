@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { cloneEmptyState, validateTrackerState } from "../src/schemas.js";
+import {
+  cloneEmptyState,
+  validateTrackerState,
+  validateTrackerStateDetailed,
+} from "../src/schemas.js";
 
 test("accepts the documented minimal scene and arc schema", () => {
   const state = cloneEmptyState();
@@ -25,6 +29,7 @@ test("rejects extra fields, oversized objectives, and forged source ids", () => 
   const extra = cloneEmptyState();
   extra.scene.unexpected = "unsafe";
   assert.equal(validateTrackerState(extra), null);
+  assert.match(validateTrackerStateDetailed(extra).error, /scene keys must be exactly/);
 
   const tooMany = cloneEmptyState();
   tooMany.arc.objectives = Array.from({ length: 4 }, (_, index) => ({
