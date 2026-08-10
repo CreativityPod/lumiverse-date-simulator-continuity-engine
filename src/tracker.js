@@ -144,6 +144,7 @@ async function resolveConnection(spindleApi, connectionId, userId) {
 async function generateCandidate(spindleApi, messages, config, sourceMessageId, previousState, userId) {
   const connection = await resolveConnection(spindleApi, config.connectionId, userId);
   const input = {
+    type: "quiet",
     messages,
     parameters: {
       ...generationParameters(connection),
@@ -152,9 +153,12 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
     reasoning: { source: "off" },
     signal: AbortSignal.timeout(normalizeTrackerTimeoutMs(config.timeoutMs)),
   };
+  // Lumiverse scopes direct generation through GenerationRequestDTO.userId.
+  // Connection profile methods instead accept userId as a positional argument.
+  if (userId) input.userId = userId;
   if (config.connectionId) input.connection_id = config.connectionId;
 
-  const response = await spindleApi.generate.quiet(input, userId);
+  const response = await spindleApi.generate.quiet(input);
   const toolState = response?.tool_calls?.find(
     (call) => call?.name === "record_date_simulator_state",
   )?.args;

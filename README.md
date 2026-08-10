@@ -38,6 +38,7 @@ The Continuity drawer also permits private-state inspection, reprocessing the la
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 300 seconds. Version 1.0.2 fixes the earlier 120-second validation ceiling.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
+- Version 1.0.4 places that operator user scope in `GenerationRequestDTO.userId`, matching the Lumiverse 1.1 runtime contract for direct generation.
 
 ## Development
 

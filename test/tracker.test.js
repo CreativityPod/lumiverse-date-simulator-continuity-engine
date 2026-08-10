@@ -54,8 +54,9 @@ test("accepts a forced Anthropic tracker tool call", async () => {
       },
     },
     generate: {
-      quiet: async (input, userId) => {
-        generatedUsers.push(userId);
+      quiet: async (input) => {
+        generatedUsers.push(input.userId);
+        assert.equal(input.type, "quiet");
         assert.equal(input.parameters.tool_choice.name, "record_date_simulator_state");
         assert.match(input.messages[0].content, /manVisible contains only/);
         return {

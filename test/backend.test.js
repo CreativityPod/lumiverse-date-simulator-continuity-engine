@@ -57,8 +57,8 @@ test("background reconciliation saves state and the interceptor injects one bran
       get: async () => ({ id: "openai", provider: "openai", model: "small", is_default: true }),
     },
     generate: {
-      quiet: async (_input, userId) => {
-        generatedUsers.push(userId);
+      quiet: async (input) => {
+        generatedUsers.push(input.userId);
         return { content: JSON.stringify(cloneEmptyState()) };
       },
     },
