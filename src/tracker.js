@@ -5,6 +5,16 @@ import {
   validateTrackerState,
 } from "./schemas.js";
 
+export const DEFAULT_TRACKER_TIMEOUT_MS = 45_000;
+export const MIN_TRACKER_TIMEOUT_MS = 5_000;
+export const MAX_TRACKER_TIMEOUT_MS = 300_000;
+
+function normalizeTrackerTimeoutMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_TRACKER_TIMEOUT_MS;
+  return Math.max(MIN_TRACKER_TIMEOUT_MS, Math.min(MAX_TRACKER_TIMEOUT_MS, Math.round(parsed)));
+}
+
 const TRACKER_SYSTEM_PROMPT = `You are the private continuity recorder for Date Simulator. Update a compact current-state ledger from canonical prior state and one newly completed public roleplay turn.
 
 Hard rules:
@@ -140,7 +150,7 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       max_tokens: Math.max(400, Math.min(2_000, Number(config.maxTokens) || 1_200)),
     },
     reasoning: { source: "off" },
-    signal: AbortSignal.timeout(Math.max(5_000, Math.min(120_000, Number(config.timeoutMs) || 45_000))),
+    signal: AbortSignal.timeout(normalizeTrackerTimeoutMs(config.timeoutMs)),
   };
   if (config.connectionId) input.connection_id = config.connectionId;
 
@@ -191,4 +201,5 @@ export const trackerTest = Object.freeze({
   generationParameters,
   trackerUserPrompt,
   migrationUserPrompt,
+  normalizeTrackerTimeoutMs,
 });

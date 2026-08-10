@@ -22,6 +22,12 @@ test("tracker prompt contains the source id and agency constraints", () => {
   assert.match(prompt, /She waves back/);
 });
 
+test("tracker timeout accepts five minutes and clamps larger values", () => {
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs(300_000), 300_000);
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs(900_000), 300_000);
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs("invalid"), 45_000);
+});
+
 test("uses native structured output only for recognized providers", () => {
   assert.ok(trackerTest.generationParameters({ provider: "openai" }).response_format);
   assert.ok(trackerTest.generationParameters({ provider: "google_gemini" }).responseSchema);

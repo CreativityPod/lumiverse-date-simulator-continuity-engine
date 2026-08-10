@@ -81,7 +81,7 @@ export function setup(ctx) {
   const timeout = document.createElement("input");
   timeout.type = "number";
   timeout.min = "5";
-  timeout.max = "120";
+  timeout.max = "300";
   configCard.append(
     createLabeledControl("Tracking enabled", enabled),
     createLabeledControl("Tracker connection", connection),

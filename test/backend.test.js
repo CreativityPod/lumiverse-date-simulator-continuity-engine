@@ -74,11 +74,13 @@ test("background reconciliation saves state and the interceptor injects one bran
     log: { info: () => undefined, warn: () => undefined, error: () => undefined },
   };
 
-  await import(`../src/backend.js?backend-test=${Date.now()}`);
+  const { backendTest } = await import(`../src/backend.js?backend-test=${Date.now()}`);
   assert.equal(typeof interceptor, "function");
   assert.equal(interceptorPriority, 250);
   assert.ok(events.has("MESSAGE_SWIPED"));
   assert.equal(typeof frontendHandler, "function");
+  assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 300_000);
+  assert.equal(backendTest.normalizeConfig({ timeoutMs: 900_000 }).timeoutMs, 300_000);
 
   const setupPrompt = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },

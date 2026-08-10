@@ -12,13 +12,19 @@ import {
   selectCheckpoint,
   transcriptForMigration,
 } from "./state.js";
-import { runMigrationTracker, runTracker } from "./tracker.js";
+import {
+  DEFAULT_TRACKER_TIMEOUT_MS,
+  MAX_TRACKER_TIMEOUT_MS,
+  MIN_TRACKER_TIMEOUT_MS,
+  runMigrationTracker,
+  runTracker,
+} from "./tracker.js";
 
 const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   connectionId: "",
   maxTokens: 1_200,
-  timeoutMs: 45_000,
+  timeoutMs: DEFAULT_TRACKER_TIMEOUT_MS,
   promptWaitMs: 2_000,
 });
 
@@ -45,7 +51,12 @@ function normalizeConfig(value) {
     enabled: source.enabled !== false,
     connectionId: typeof source.connectionId === "string" ? source.connectionId : "",
     maxTokens: boundedInteger(source.maxTokens, 1_200, 400, 2_000),
-    timeoutMs: boundedInteger(source.timeoutMs, 45_000, 5_000, 120_000),
+    timeoutMs: boundedInteger(
+      source.timeoutMs,
+      DEFAULT_TRACKER_TIMEOUT_MS,
+      MIN_TRACKER_TIMEOUT_MS,
+      MAX_TRACKER_TIMEOUT_MS,
+    ),
     promptWaitMs: boundedInteger(source.promptWaitMs, 2_000, 0, 5_000),
   };
 }
