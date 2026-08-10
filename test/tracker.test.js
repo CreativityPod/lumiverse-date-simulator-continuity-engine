@@ -29,7 +29,9 @@ test("tracker timeout accepts five minutes and clamps larger values", () => {
 });
 
 test("uses native structured output only for recognized providers", () => {
-  assert.ok(trackerTest.generationParameters({ provider: "openai" }).response_format);
+  const openAiParameters = trackerTest.generationParameters({ provider: "openai" });
+  assert.equal(openAiParameters.max_tokens, 2_000);
+  assert.ok(openAiParameters.response_format);
   assert.ok(trackerTest.generationParameters({ provider: "google_gemini" }).responseSchema);
   assert.equal(
     trackerTest.generationParameters({ provider: "anthropic" }).tool_choice.name,

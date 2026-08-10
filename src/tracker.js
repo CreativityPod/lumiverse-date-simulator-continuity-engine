@@ -8,6 +8,9 @@ import {
 export const DEFAULT_TRACKER_TIMEOUT_MS = 45_000;
 export const MIN_TRACKER_TIMEOUT_MS = 5_000;
 export const MAX_TRACKER_TIMEOUT_MS = 300_000;
+export const DEFAULT_TRACKER_MAX_TOKENS = 2_000;
+export const MIN_TRACKER_MAX_TOKENS = 400;
+export const MAX_TRACKER_MAX_TOKENS = 2_000;
 
 function normalizeTrackerTimeoutMs(value) {
   const parsed = Number(value);
@@ -86,7 +89,7 @@ function extractJson(text) {
 }
 
 function generationParameters(connection) {
-  const base = { temperature: 0, top_p: 0.1, max_tokens: 1_200 };
+  const base = { temperature: 0, top_p: 0.1, max_tokens: DEFAULT_TRACKER_MAX_TOKENS };
   const provider = String(connection?.provider ?? "").toLowerCase();
   if (provider.includes("google") || provider.includes("gemini")) {
     return { ...base, responseMimeType: "application/json", responseSchema: TRACKER_JSON_SCHEMA };
@@ -158,7 +161,13 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       messages: attemptMessages,
       parameters: {
         ...generationParameters(connection),
-        max_tokens: Math.max(400, Math.min(2_000, Number(config.maxTokens) || 1_200)),
+        max_tokens: Math.max(
+          MIN_TRACKER_MAX_TOKENS,
+          Math.min(
+            MAX_TRACKER_MAX_TOKENS,
+            Number(config.maxTokens) || DEFAULT_TRACKER_MAX_TOKENS,
+          ),
+        ),
       },
       reasoning: { source: "off" },
       signal: AbortSignal.timeout(normalizeTrackerTimeoutMs(config.timeoutMs)),

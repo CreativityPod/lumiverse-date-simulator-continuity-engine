@@ -202,7 +202,7 @@ export function setup(ctx) {
       ? `Revision ${status.revision || 0}${status.updatedAt ? ` · ${status.updatedAt}` : ""}`
       : "No active chat.";
     enabled.checked = status.config?.enabled !== false;
-    maxTokens.value = String(status.config?.maxTokens ?? 1_200);
+    maxTokens.value = String(status.config?.maxTokens ?? 2_000);
     timeout.value = String(Math.round((status.config?.timeoutMs ?? 45_000) / 1_000));
     renderConnections();
     stateText.textContent = showPrivate.checked && status.state

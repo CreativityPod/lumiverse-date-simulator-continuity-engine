@@ -13,8 +13,11 @@ import {
   transcriptForMigration,
 } from "./state.js";
 import {
+  DEFAULT_TRACKER_MAX_TOKENS,
   DEFAULT_TRACKER_TIMEOUT_MS,
+  MAX_TRACKER_MAX_TOKENS,
   MAX_TRACKER_TIMEOUT_MS,
+  MIN_TRACKER_MAX_TOKENS,
   MIN_TRACKER_TIMEOUT_MS,
   runMigrationTracker,
   runTracker,
@@ -23,7 +26,7 @@ import {
 const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   connectionId: "",
-  maxTokens: 1_200,
+  maxTokens: DEFAULT_TRACKER_MAX_TOKENS,
   timeoutMs: DEFAULT_TRACKER_TIMEOUT_MS,
   promptWaitMs: 2_000,
 });
@@ -73,7 +76,12 @@ function normalizeConfig(value) {
   return {
     enabled: source.enabled !== false,
     connectionId: typeof source.connectionId === "string" ? source.connectionId : "",
-    maxTokens: boundedInteger(source.maxTokens, 1_200, 400, 2_000),
+    maxTokens: boundedInteger(
+      source.maxTokens,
+      DEFAULT_TRACKER_MAX_TOKENS,
+      MIN_TRACKER_MAX_TOKENS,
+      MAX_TRACKER_MAX_TOKENS,
+    ),
     timeoutMs: boundedInteger(
       source.timeoutMs,
       DEFAULT_TRACKER_TIMEOUT_MS,

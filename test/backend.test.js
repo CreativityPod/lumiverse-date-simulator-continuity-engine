@@ -83,6 +83,7 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(interceptorPriority, 250);
   assert.ok(events.has("MESSAGE_SWIPED"));
   assert.equal(typeof frontendHandler, "function");
+  assert.equal(backendTest.normalizeConfig({}).maxTokens, 2_000);
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 300_000);
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 900_000 }).timeoutMs, 300_000);
 
