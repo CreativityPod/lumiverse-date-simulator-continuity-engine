@@ -31,6 +31,7 @@ test("background reconciliation saves state and the interceptor injects one bran
   let interceptorPriority;
   let frontendHandler;
   const connectionListUsers = [];
+  const generatedUsers = [];
 
   globalThis.spindle = {
     permissions: {
@@ -56,7 +57,10 @@ test("background reconciliation saves state and the interceptor injects one bran
       get: async () => ({ id: "openai", provider: "openai", model: "small", is_default: true }),
     },
     generate: {
-      quiet: async () => ({ content: JSON.stringify(cloneEmptyState()) }),
+      quiet: async (_input, userId) => {
+        generatedUsers.push(userId);
+        return { content: JSON.stringify(cloneEmptyState()) };
+      },
     },
     registerInterceptor: (handler, priority) => {
       interceptor = handler;
@@ -91,12 +95,13 @@ test("background reconciliation saves state and the interceptor injects one bran
   await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
   assert.ok(frontendMessages.some((payload) => payload.chatId === "chat-1"));
   await frontendHandler({ type: "continuity_get_connections" }, "user-1");
-  assert.deepEqual(connectionListUsers, ["user-1"]);
+  assert.ok(connectionListUsers.includes("user-1"));
+  assert.ok(connectionListUsers.every((userId) => userId === "user-1"));
   assert.ok(frontendMessages.some(
     (payload) => payload.type === "continuity_connections" && payload.connections[0]?.id === "openai",
   ));
 
-  await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: messages[1] });
+  await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: messages[1] }, "user-1");
 
   assert.equal(variables.get("chat-1:date_simulator.phase"), "active");
   assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "1");
@@ -104,6 +109,8 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).date, "Unknown");
   assert.equal(files.get("chats/chat-1.json").revision, 1);
   assert.ok(frontendMessages.some((payload) => payload.level === "green"));
+  assert.ok(generatedUsers.length > 0);
+  assert.ok(generatedUsers.every((userId) => userId === "user-1"));
 
   const assembled = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },

@@ -39,13 +39,23 @@ test("uses native structured output only for recognized providers", () => {
 
 test("accepts a forced Anthropic tracker tool call", async () => {
   const state = cloneEmptyState();
+  const listedUsers = [];
+  const fetchedConnections = [];
+  const generatedUsers = [];
   const spindleApi = {
     connections: {
-      list: async () => [{ id: "claude", provider: "anthropic", is_default: true }],
-      get: async () => null,
+      list: async (userId) => {
+        listedUsers.push(userId);
+        return [{ id: "claude", provider: "anthropic", is_default: true }];
+      },
+      get: async (connectionId, userId) => {
+        fetchedConnections.push({ connectionId, userId });
+        return { id: connectionId, provider: "anthropic", is_default: true };
+      },
     },
     generate: {
-      quiet: async (input) => {
+      quiet: async (input, userId) => {
+        generatedUsers.push(userId);
         assert.equal(input.parameters.tool_choice.name, "record_date_simulator_state");
         assert.match(input.messages[0].content, /manVisible contains only/);
         return {
@@ -55,16 +65,27 @@ test("accepts a forced Anthropic tracker tool call", async () => {
       },
     },
   };
+  const trackerInput = {
+    caseText: "CASE",
+    previousState: null,
+    userText: "Hello.",
+    assistantText: "She says hello.",
+    sourceMessageId: "a1",
+  };
   const result = await runTracker(
     spindleApi,
-    {
-      caseText: "CASE",
-      previousState: null,
-      userText: "Hello.",
-      assistantText: "She says hello.",
-      sourceMessageId: "a1",
-    },
+    trackerInput,
     { connectionId: "", maxTokens: 800, timeoutMs: 5_000 },
+    "user-1",
   );
   assert.deepEqual(result, state);
+  await runTracker(
+    spindleApi,
+    trackerInput,
+    { connectionId: "claude", maxTokens: 800, timeoutMs: 5_000 },
+    "user-1",
+  );
+  assert.deepEqual(listedUsers, ["user-1"]);
+  assert.deepEqual(fetchedConnections, [{ connectionId: "claude", userId: "user-1" }]);
+  assert.deepEqual(generatedUsers, ["user-1", "user-1"]);
 });

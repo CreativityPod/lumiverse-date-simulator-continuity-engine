@@ -30,13 +30,36 @@ const DEFAULT_CONFIG = Object.freeze({
 
 const queues = new Map();
 const pendingByChat = new Map();
+const userByChat = new Map();
+const activeChatByUser = new Map();
 let interceptorRegistered = false;
 let activeChatId = null;
 let frontendUserId = undefined;
 
-function adoptActiveChat(chatId) {
-  if (typeof chatId === "string" && chatId.trim()) activeChatId = chatId;
+function validUserId(userId) {
+  return typeof userId === "string" && Boolean(userId.trim());
+}
+
+function adoptActiveChat(chatId, userId) {
+  if (typeof chatId === "string" && chatId.trim()) {
+    activeChatId = chatId;
+    if (validUserId(userId)) {
+      frontendUserId = userId;
+      userByChat.set(chatId, userId);
+      activeChatByUser.set(userId, chatId);
+    }
+  }
+  if (validUserId(userId)) return activeChatByUser.get(userId) ?? null;
   return activeChatId;
+}
+
+function userForChat(chatId, userId) {
+  if (validUserId(userId)) {
+    frontendUserId = userId;
+    if (chatId) userByChat.set(chatId, userId);
+    return userId;
+  }
+  return userByChat.get(chatId) ?? frontendUserId;
 }
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -199,8 +222,8 @@ async function statusPayload(chatId, options = {}) {
   return payload;
 }
 
-async function publishStatus(chatId, options = {}) {
-  sendFrontend(await statusPayload(chatId, options));
+async function publishStatus(chatId, options = {}, userId) {
+  sendFrontend(await statusPayload(chatId, options), userForChat(chatId, userId));
 }
 
 async function selectedBranchStillMatches(chatId, turn) {
@@ -219,7 +242,7 @@ function resetForEpoch(store, context) {
   return next;
 }
 
-async function performMigration(chatId, messages, context, store, config) {
+async function performMigration(chatId, messages, context, store, config, userId) {
   const turns = listEligibleTurns(messages, context);
   const latest = turns.at(-1);
   if (!latest) throw new Error("No immersive assistant turn is available to migrate.");
@@ -232,6 +255,7 @@ async function performMigration(chatId, messages, context, store, config) {
       sourceMessageId: String(latest.assistant.id),
     },
     config,
+    userId,
   );
   if (!(await selectedBranchStillMatches(chatId, latest))) {
     throw new Error("The selected branch changed during migration.");
@@ -251,8 +275,9 @@ async function performMigration(chatId, messages, context, store, config) {
   return store;
 }
 
-async function reconcileChat(chatId, options = {}) {
+async function reconcileChat(chatId, options = {}, userId) {
   if (!chatId || !spindle.permissions.has("chat_mutation")) return;
+  const scopedUserId = userForChat(chatId, userId);
   const config = await loadConfig();
   const messages = await spindle.chat.getMessages(chatId);
   const context = deriveTranscriptContext(messages);
@@ -266,7 +291,7 @@ async function reconcileChat(chatId, options = {}) {
     store.lastError = "";
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
-    await publishStatus(chatId);
+    await publishStatus(chatId, {}, scopedUserId);
     return;
   }
 
@@ -277,7 +302,7 @@ async function reconcileChat(chatId, options = {}) {
     store.processing = false;
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
-    await publishStatus(chatId);
+    await publishStatus(chatId, {}, scopedUserId);
     return;
   }
 
@@ -298,7 +323,7 @@ async function reconcileChat(chatId, options = {}) {
       store.processing = false;
       await saveStore(chatId, store);
       await mirrorStore(chatId, store, context);
-      await publishStatus(chatId);
+      await publishStatus(chatId, {}, scopedUserId);
       return;
     }
   }
@@ -307,7 +332,7 @@ async function reconcileChat(chatId, options = {}) {
     store.processing = false;
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
-    await publishStatus(chatId);
+    await publishStatus(chatId, {}, scopedUserId);
     return;
   }
   if (!spindle.permissions.has("generation")) {
@@ -315,18 +340,18 @@ async function reconcileChat(chatId, options = {}) {
     store.lastError = "Generation permission is not granted.";
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
-    await publishStatus(chatId);
+    await publishStatus(chatId, {}, scopedUserId);
     return;
   }
 
   store.processing = true;
   store.lastError = "";
   await saveStore(chatId, store);
-  await publishStatus(chatId);
+  await publishStatus(chatId, {}, scopedUserId);
 
   try {
     if (options.allowMigration && !nativeV14 && !store.migrationAccepted) {
-      store = await performMigration(chatId, messages, context, store, config);
+      store = await performMigration(chatId, messages, context, store, config, scopedUserId);
     } else {
       const turns = listEligibleTurns(messages, context);
       let previousState = null;
@@ -374,6 +399,7 @@ async function reconcileChat(chatId, options = {}) {
             sourceMessageId: String(turn.assistant.id),
           },
           config,
+          scopedUserId,
         );
         if (!(await selectedBranchStillMatches(chatId, turn))) {
           throw new Error("The selected branch changed while tracking.");
@@ -402,16 +428,17 @@ async function reconcileChat(chatId, options = {}) {
     store.processing = false;
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
-    await publishStatus(chatId);
+    await publishStatus(chatId, {}, scopedUserId);
   }
 }
 
-function scheduleReconcile(chatId, options = {}) {
+function scheduleReconcile(chatId, options = {}, userId) {
   if (!chatId) return Promise.resolve();
+  const scopedUserId = userForChat(chatId, userId);
   const previous = queues.get(chatId) ?? Promise.resolve();
   const current = previous
     .catch(() => undefined)
-    .then(() => reconcileChat(chatId, options))
+    .then(() => reconcileChat(chatId, options, scopedUserId))
     .catch((error) => spindle.log.error(`Continuity queue failed: ${String(error)}`))
     .finally(() => {
       if (queues.get(chatId) === current) queues.delete(chatId);
@@ -484,13 +511,26 @@ for (const eventName of [
   "MESSAGE_SWIPED",
   "SWIPE_EDITED",
 ]) {
-  spindle.on(eventName, (payload) => scheduleReconcile(adoptActiveChat(payload?.chatId)));
+  spindle.on(eventName, (payload, userId) => {
+    const chatId = adoptActiveChat(payload?.chatId, userId);
+    return scheduleReconcile(chatId, {}, userId);
+  });
 }
 
-spindle.on("CHAT_SWITCHED", (payload) => {
-  activeChatId = payload?.chatId ?? null;
-  if (activeChatId) scheduleReconcile(activeChatId);
-  else publishStatus(null);
+spindle.on("CHAT_SWITCHED", (payload, userId) => {
+  if (typeof payload?.chatId === "string" && payload.chatId) {
+    const chatId = adoptActiveChat(payload.chatId, userId);
+    scheduleReconcile(chatId, {}, userId);
+    return;
+  }
+  if (validUserId(userId)) {
+    const previousChatId = activeChatByUser.get(userId);
+    activeChatByUser.delete(userId);
+    if (activeChatId === previousChatId) activeChatId = null;
+  } else {
+    activeChatId = null;
+  }
+  publishStatus(null, {}, userId);
 });
 
 spindle.permissions.onChanged(({ permission, granted }) => {
@@ -502,8 +542,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
   frontendUserId = userId;
   const type = payload?.type;
   if (type === "continuity_get_status") {
-    const chatId = adoptActiveChat(payload.chatId);
-    if (chatId) scheduleReconcile(chatId);
+    const chatId = adoptActiveChat(payload.chatId, userId);
+    if (chatId) scheduleReconcile(chatId, {}, userId);
     sendFrontend(await statusPayload(chatId, { includePrivate: Boolean(payload.includePrivate) }), userId);
   } else if (type === "continuity_get_connections") {
     let connections = [];
@@ -527,14 +567,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
   } else if (type === "continuity_save_config") {
     const config = await saveConfig(payload.config);
     sendFrontend({ type: "continuity_config_saved", config }, userId);
-    const chatId = adoptActiveChat(payload.chatId);
-    if (chatId) scheduleReconcile(chatId);
+    const chatId = adoptActiveChat(payload.chatId, userId);
+    if (chatId) scheduleReconcile(chatId, {}, userId);
   } else if (type === "continuity_reprocess") {
-    const chatId = adoptActiveChat(payload.chatId);
-    if (chatId) scheduleReconcile(chatId, { forceLatest: true });
+    const chatId = adoptActiveChat(payload.chatId, userId);
+    if (chatId) scheduleReconcile(chatId, { forceLatest: true }, userId);
   } else if (type === "continuity_migrate") {
-    const chatId = adoptActiveChat(payload.chatId);
-    if (chatId) scheduleReconcile(chatId, { allowMigration: true });
+    const chatId = adoptActiveChat(payload.chatId, userId);
+    if (chatId) scheduleReconcile(chatId, { allowMigration: true }, userId);
   }
 });
 
@@ -546,4 +586,5 @@ export const backendTest = Object.freeze({
   readiness,
   safeChatToken,
   adoptActiveChat,
+  userForChat,
 });

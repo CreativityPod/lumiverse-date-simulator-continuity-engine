@@ -37,6 +37,7 @@ The Continuity drawer also permits private-state inspection, reprocessing the la
 - If a rendered private-profile card still says the engine is not detected, switch back to the chat or render/send one message after updating the extension. Version 1.0.1 also recovers the current chat ID from rendered and sent-message events, so the warning is replaced as soon as the startup handshake completes.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 300 seconds. Version 1.0.2 fixes the earlier 120-second validation ceiling.
+- Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
 
 ## Development
 

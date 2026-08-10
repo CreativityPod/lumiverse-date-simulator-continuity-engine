@@ -125,24 +125,24 @@ function generationParameters(connection) {
   return base;
 }
 
-async function resolveConnection(spindleApi, connectionId) {
+async function resolveConnection(spindleApi, connectionId, userId) {
   if (!connectionId) {
     try {
-      const connections = await spindleApi.connections.list();
+      const connections = await spindleApi.connections.list(userId);
       return connections.find((connection) => connection?.is_default) ?? null;
     } catch {
       return null;
     }
   }
   try {
-    return await spindleApi.connections.get(connectionId);
+    return await spindleApi.connections.get(connectionId, userId);
   } catch {
     return null;
   }
 }
 
-async function generateCandidate(spindleApi, messages, config, sourceMessageId, previousState) {
-  const connection = await resolveConnection(spindleApi, config.connectionId);
+async function generateCandidate(spindleApi, messages, config, sourceMessageId, previousState, userId) {
+  const connection = await resolveConnection(spindleApi, config.connectionId, userId);
   const input = {
     messages,
     parameters: {
@@ -154,7 +154,7 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
   };
   if (config.connectionId) input.connection_id = config.connectionId;
 
-  const response = await spindleApi.generate.quiet(input);
+  const response = await spindleApi.generate.quiet(input, userId);
   const toolState = response?.tool_calls?.find(
     (call) => call?.name === "record_date_simulator_state",
   )?.args;
@@ -170,7 +170,7 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
   return validated;
 }
 
-export async function runTracker(spindleApi, input, config) {
+export async function runTracker(spindleApi, input, config, userId) {
   return generateCandidate(
     spindleApi,
     [
@@ -180,10 +180,11 @@ export async function runTracker(spindleApi, input, config) {
     config,
     input.sourceMessageId,
     input.previousState,
+    userId,
   );
 }
 
-export async function runMigrationTracker(spindleApi, input, config) {
+export async function runMigrationTracker(spindleApi, input, config, userId) {
   return generateCandidate(
     spindleApi,
     [
@@ -193,6 +194,7 @@ export async function runMigrationTracker(spindleApi, input, config) {
     config,
     input.sourceMessageId,
     null,
+    userId,
   );
 }
 
