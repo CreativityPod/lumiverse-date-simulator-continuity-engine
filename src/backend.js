@@ -28,6 +28,11 @@ let interceptorRegistered = false;
 let activeChatId = null;
 let frontendUserId = undefined;
 
+function adoptActiveChat(chatId) {
+  if (typeof chatId === "string" && chatId.trim()) activeChatId = chatId;
+  return activeChatId;
+}
+
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -109,7 +114,7 @@ function readiness(config) {
   return {
     level: "green",
     code: "ready",
-    text: "Continuity Engine active. Private profile saved; scene and arc tracking are automatic.",
+    text: "Continuity Engine ready. Open a Date Simulator v1.4 chat to begin tracking.",
   };
 }
 
@@ -167,6 +172,17 @@ async function statusPayload(chatId, options = {}) {
     payload.level = "amber";
     payload.code = "error";
     payload.text = `Continuity Engine kept the last valid state: ${payload.lastError}`;
+  } else if (base.level === "green" && caseMessageId && !profileSaved) {
+    payload.level = "amber";
+    payload.code = "profile_saving";
+    payload.text = "Continuity Engine detected. Saving the private profile outside chat context…";
+  } else if (base.level === "green" && caseMessageId && profileSaved) {
+    payload.level = "green";
+    payload.code = "ready";
+    payload.text = "Continuity Engine active. Private profile saved; scene and arc tracking are automatic.";
+  } else if (base.level === "green") {
+    payload.code = "ready_no_profile";
+    payload.text = "Continuity Engine ready. No Date Simulator v1.4 private profile was found in this chat yet.";
   }
   if (options.includePrivate) payload.state = store.current;
   return payload;
@@ -457,7 +473,7 @@ for (const eventName of [
   "MESSAGE_SWIPED",
   "SWIPE_EDITED",
 ]) {
-  spindle.on(eventName, (payload) => scheduleReconcile(payload?.chatId));
+  spindle.on(eventName, (payload) => scheduleReconcile(adoptActiveChat(payload?.chatId)));
 }
 
 spindle.on("CHAT_SWITCHED", (payload) => {
@@ -475,25 +491,39 @@ spindle.onFrontendMessage(async (payload, userId) => {
   frontendUserId = userId;
   const type = payload?.type;
   if (type === "continuity_get_status") {
-    sendFrontend(await statusPayload(activeChatId, { includePrivate: Boolean(payload.includePrivate) }), userId);
+    const chatId = adoptActiveChat(payload.chatId);
+    if (chatId) scheduleReconcile(chatId);
+    sendFrontend(await statusPayload(chatId, { includePrivate: Boolean(payload.includePrivate) }), userId);
   } else if (type === "continuity_get_connections") {
     let connections = [];
-    if (spindle.permissions.has("generation")) {
+    let error = "";
+    const permissionGranted = spindle.permissions.has("generation");
+    if (permissionGranted) {
       try {
-        connections = await spindle.connections.list();
-      } catch {
+        const listed = await spindle.connections.list(userId);
+        connections = Array.isArray(listed) ? listed : [];
+      } catch (listError) {
         connections = [];
+        error = listError instanceof Error ? listError.message : String(listError);
       }
     }
-    sendFrontend({ type: "continuity_connections", connections }, userId);
+    sendFrontend({
+      type: "continuity_connections",
+      connections,
+      permissionGranted,
+      error,
+    }, userId);
   } else if (type === "continuity_save_config") {
     const config = await saveConfig(payload.config);
     sendFrontend({ type: "continuity_config_saved", config }, userId);
-    if (activeChatId) scheduleReconcile(activeChatId);
-  } else if (type === "continuity_reprocess" && activeChatId) {
-    scheduleReconcile(activeChatId, { forceLatest: true });
-  } else if (type === "continuity_migrate" && activeChatId) {
-    scheduleReconcile(activeChatId, { allowMigration: true });
+    const chatId = adoptActiveChat(payload.chatId);
+    if (chatId) scheduleReconcile(chatId);
+  } else if (type === "continuity_reprocess") {
+    const chatId = adoptActiveChat(payload.chatId);
+    if (chatId) scheduleReconcile(chatId, { forceLatest: true });
+  } else if (type === "continuity_migrate") {
+    const chatId = adoptActiveChat(payload.chatId);
+    if (chatId) scheduleReconcile(chatId, { allowMigration: true });
   }
 });
 
@@ -504,4 +534,5 @@ export const backendTest = Object.freeze({
   normalizeConfig,
   readiness,
   safeChatToken,
+  adoptActiveChat,
 });

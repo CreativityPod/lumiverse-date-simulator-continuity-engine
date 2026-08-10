@@ -29,6 +29,8 @@ test("background reconciliation saves state and the interceptor injects one bran
   ];
   let interceptor;
   let interceptorPriority;
+  let frontendHandler;
+  const connectionListUsers = [];
 
   globalThis.spindle = {
     permissions: {
@@ -47,7 +49,10 @@ test("background reconciliation saves state and the interceptor injects one bran
     },
     chat: { getMessages: async () => structuredClone(messages) },
     connections: {
-      list: async () => [{ id: "openai", name: "Tracker", provider: "openai", model: "small", is_default: true }],
+      list: async (userId) => {
+        connectionListUsers.push(userId);
+        return [{ id: "openai", name: "Tracker", provider: "openai", model: "small", is_default: true }];
+      },
       get: async () => ({ id: "openai", provider: "openai", model: "small", is_default: true }),
     },
     generate: {
@@ -61,7 +66,10 @@ test("background reconciliation saves state and the interceptor injects one bran
       events.set(name, handler);
       return () => events.delete(name);
     },
-    onFrontendMessage: () => () => undefined,
+    onFrontendMessage: (handler) => {
+      frontendHandler = handler;
+      return () => { frontendHandler = undefined; };
+    },
     sendToFrontend: (payload) => frontendMessages.push(payload),
     log: { info: () => undefined, warn: () => undefined, error: () => undefined },
   };
@@ -70,12 +78,21 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(typeof interceptor, "function");
   assert.equal(interceptorPriority, 250);
   assert.ok(events.has("MESSAGE_SWIPED"));
+  assert.equal(typeof frontendHandler, "function");
 
   const setupPrompt = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
     { role: "user", content: "Surprise me" },
   ];
   assert.equal(await interceptor(setupPrompt, { chatId: "chat-1" }), setupPrompt);
+
+  await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
+  assert.ok(frontendMessages.some((payload) => payload.chatId === "chat-1"));
+  await frontendHandler({ type: "continuity_get_connections" }, "user-1");
+  assert.deepEqual(connectionListUsers, ["user-1"]);
+  assert.ok(frontendMessages.some(
+    (payload) => payload.type === "continuity_connections" && payload.connections[0]?.id === "openai",
+  ));
 
   await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: messages[1] });
 

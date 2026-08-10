@@ -21,6 +21,9 @@ export function setup(ctx) {
   const cleanups = [];
   let latestStatus = null;
   let latestConnections = [];
+  let activeChatId = null;
+  let connectionDiagnostic = "Loading connection profiles…";
+  let connectionPermissionGranted = null;
 
   const removeStyle = ctx.dom.addStyle(`
     .dsc-panel { padding: 14px; color: var(--lumiverse-text); display: grid; gap: 12px; }
@@ -32,6 +35,8 @@ export function setup(ctx) {
     .dsc-field select, .dsc-field input { color: var(--lumiverse-text); background: var(--lumiverse-fill); border: 1px solid var(--lumiverse-border); border-radius: 8px; padding: 8px; }
     .dsc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
     .dsc-button { color: var(--lumiverse-accent-fg); background: var(--lumiverse-accent); border: 0; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+    .dsc-hint { color: var(--lumiverse-text-muted); font-size: .76rem; overflow-wrap: anywhere; }
+    .dsc-hint[data-level="amber"] { color: #f59e0b; }
     .dsc-state { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow: auto; font-size: .78rem; color: var(--lumiverse-text-muted); }
     .ds-tracker-status[data-engine-level="green"] { color: #bbf7d0 !important; border-color: rgba(34,197,94,.45) !important; background: rgba(21,128,61,.18) !important; }
     .ds-tracker-status[data-engine-level="amber"] { color: #fde68a !important; border-color: rgba(245,158,11,.45) !important; background: rgba(146,64,14,.18) !important; }
@@ -66,6 +71,8 @@ export function setup(ctx) {
   const enabled = document.createElement("input");
   enabled.type = "checkbox";
   const connection = document.createElement("select");
+  const connectionStatus = document.createElement("div");
+  connectionStatus.className = "dsc-hint";
   const maxTokens = document.createElement("input");
   maxTokens.type = "number";
   maxTokens.min = "400";
@@ -77,6 +84,7 @@ export function setup(ctx) {
   configCard.append(
     createLabeledControl("Tracking enabled", enabled),
     createLabeledControl("Tracker connection", connection),
+    connectionStatus,
     createLabeledControl("Maximum tracker output tokens", maxTokens),
     createLabeledControl("Tracker timeout in seconds", timeout),
   );
@@ -100,6 +108,7 @@ export function setup(ctx) {
     createButton("Save Settings", () => {
       ctx.sendToBackend({
         type: "continuity_save_config",
+        chatId: activeChatId,
         config: {
           enabled: enabled.checked,
           connectionId: connection.value,
@@ -109,11 +118,16 @@ export function setup(ctx) {
         },
       });
     }),
+    createButton("Refresh Connections", () => {
+      connectionDiagnostic = "Refreshing connection profiles…";
+      renderConnections();
+      ctx.sendToBackend({ type: "continuity_get_connections" });
+    }),
     createButton("Reprocess Latest Turn", () => {
-      ctx.sendToBackend({ type: "continuity_reprocess" });
+      ctx.sendToBackend({ type: "continuity_reprocess", chatId: activeChatId });
     }),
     createButton("Migrate Current Chat", () => {
-      ctx.sendToBackend({ type: "continuity_migrate" });
+      ctx.sendToBackend({ type: "continuity_migrate", chatId: activeChatId });
     }),
   );
 
@@ -123,6 +137,7 @@ export function setup(ctx) {
   function requestStatus() {
     ctx.sendToBackend({
       type: "continuity_get_status",
+      chatId: activeChatId,
       includePrivate: showPrivate.checked,
     });
   }
@@ -134,13 +149,29 @@ export function setup(ctx) {
     automatic.value = "";
     automatic.textContent = "Active default connection";
     connection.appendChild(automatic);
-    for (const item of latestConnections) {
+    for (const item of latestConnections.filter((entry) => entry?.id)) {
       const option = document.createElement("option");
       option.value = item.id;
-      option.textContent = `${item.name} — ${item.provider}/${item.model}`;
+      const details = [item.provider, item.model].filter(Boolean).join("/");
+      option.textContent = `${item.name || item.id}${details ? ` — ${details}` : ""}`;
       connection.appendChild(option);
     }
+    if (selected && !latestConnections.some((item) => item?.id === selected)) {
+      const unavailable = document.createElement("option");
+      unavailable.value = selected;
+      unavailable.textContent = `${selected} — saved profile unavailable`;
+      connection.appendChild(unavailable);
+    }
     connection.value = selected;
+    connection.disabled = connectionPermissionGranted === false;
+    connectionStatus.dataset.level = connectionPermissionGranted === false || connectionDiagnostic
+      ? "amber"
+      : "green";
+    connectionStatus.textContent = connectionDiagnostic || (
+      latestConnections.length > 0
+        ? `${latestConnections.length} connection profile${latestConnections.length === 1 ? "" : "s"} available.`
+        : "No named connection profiles were returned; the active default connection remains available."
+    );
   }
 
   function updateProfileCard(status) {
@@ -164,6 +195,7 @@ export function setup(ctx) {
 
   function renderStatus(status) {
     latestStatus = status;
+    if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
     statusText.dataset.level = status.level;
     statusText.textContent = status.text;
     statusMeta.textContent = status.chatId
@@ -190,13 +222,28 @@ export function setup(ctx) {
     if (payload?.type === "continuity_status") renderStatus(payload);
     if (payload?.type === "continuity_connections") {
       latestConnections = Array.isArray(payload.connections) ? payload.connections : [];
+      connectionPermissionGranted = payload.permissionGranted !== false;
+      if (!connectionPermissionGranted) {
+        connectionDiagnostic = "Generation permission is not granted. Grant it to Continuity Engine, then refresh connections.";
+      } else if (payload.error) {
+        connectionDiagnostic = `Lumiverse could not list connection profiles: ${payload.error}`;
+      } else {
+        connectionDiagnostic = "";
+      }
       renderConnections();
     }
     if (payload?.type === "continuity_config_saved") requestStatus();
   }));
 
-  for (const eventName of ["CHAT_SWITCHED", "CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"] ) {
-    cleanups.push(ctx.events.on(eventName, requestStatus));
+  cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
+    activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
+    requestStatus();
+  }));
+  for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
+    cleanups.push(ctx.events.on(eventName, (payload) => {
+      if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
+      requestStatus();
+    }));
   }
 
   ctx.ready();
