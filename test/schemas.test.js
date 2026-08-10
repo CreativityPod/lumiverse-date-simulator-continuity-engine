@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  TRACKER_JSON_SCHEMA,
   cloneEmptyState,
+  recoverTrackerStateDetailed,
   validateTrackerState,
   validateTrackerStateDetailed,
 } from "../src/schemas.js";
@@ -29,7 +31,7 @@ test("rejects extra fields, oversized objectives, and forged source ids", () => 
   const extra = cloneEmptyState();
   extra.scene.unexpected = "unsafe";
   assert.equal(validateTrackerState(extra), null);
-  assert.match(validateTrackerStateDetailed(extra).error, /scene keys must be exactly/);
+  assert.match(validateTrackerStateDetailed(extra).error, /scene has unexpected field: unexpected/);
 
   const tooMany = cloneEmptyState();
   tooMany.arc.objectives = Array.from({ length: 4 }, (_, index) => ({
@@ -43,6 +45,50 @@ test("rejects extra fields, oversized objectives, and forged source ids", () => 
   forged.arc.relationship.latestChange = "Changed";
   forged.arc.relationship.sourceMessageId = "wrong";
   assert.equal(validateTrackerState(forged, { sourceMessageId: "right" }), null);
+});
+
+test("recovers harmless leaf and objective failures without discarding valid sections", () => {
+  const previous = cloneEmptyState();
+  previous.scene.weather = "Clear and cool.";
+  previous.arc.objectives = [{ owner: "Elena", objective: "Confirm Friday dinner.", status: "active" }];
+
+  const candidate = structuredClone(previous);
+  candidate.scene.date = "Sunday, August 10, 2026";
+  candidate.scene.weather = "";
+  candidate.scene.extraNarration = "ignored";
+  candidate.arc.objectives = [{ owner: "Elena", objective: "Choose a restaurant.", status: "" }];
+
+  const recovered = recoverTrackerStateDetailed(candidate, { previousState: previous });
+  assert.ok(recovered.state);
+  assert.equal(recovered.state.scene.date, "Sunday, August 10, 2026");
+  assert.equal(recovered.state.scene.weather, "Clear and cool.");
+  assert.deepEqual(recovered.state.arc.objectives, previous.arc.objectives);
+  assert.equal(Object.hasOwn(recovered.state.scene, "extraNarration"), false);
+  assert.match(recovered.warnings.join("; "), /scene\.weather was invalid/);
+  assert.match(recovered.warnings.join("; "), /arc\.objectives\[0\]\.status must not be empty/);
+});
+
+test("preserves the prior relationship when source linkage is unsupported", () => {
+  const previous = cloneEmptyState();
+  previous.arc.relationship.latestChange = "She accepted another date.";
+  previous.arc.relationship.sourceMessageId = "a-prior";
+  const candidate = structuredClone(previous);
+  candidate.arc.relationship.latestChange = "She agreed to move in.";
+  candidate.arc.relationship.sourceMessageId = "forged";
+
+  const recovered = recoverTrackerStateDetailed(candidate, {
+    previousState: previous,
+    allowedSourceMessageIds: ["a-current", "a-prior"],
+  });
+  assert.deepEqual(recovered.state.arc.relationship, previous.arc.relationship);
+  assert.match(recovered.warnings.join("; "), /source linkage was invalid/);
+});
+
+test("provider schema carries the same objective string bounds as runtime validation", () => {
+  const objective = TRACKER_JSON_SCHEMA.properties.arc.properties.objectives.items.properties;
+  assert.deepEqual(objective.owner, { type: "string", pattern: "^[\\s\\S]{1,500}$" });
+  assert.deepEqual(objective.objective, { type: "string", pattern: "^[\\s\\S]{1,500}$" });
+  assert.deepEqual(objective.status, { type: "string", pattern: "^[\\s\\S]{1,500}$" });
 });
 
 test("allows a prior relationship change to persist on a no-change turn", () => {

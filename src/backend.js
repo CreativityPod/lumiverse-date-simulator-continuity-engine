@@ -13,12 +13,14 @@ import {
   transcriptForMigration,
 } from "./state.js";
 import {
+  DEFAULT_TRACKER_OUTPUT_MODE,
   DEFAULT_TRACKER_MAX_TOKENS,
   DEFAULT_TRACKER_TIMEOUT_MS,
   MAX_TRACKER_MAX_TOKENS,
   MAX_TRACKER_TIMEOUT_MS,
   MIN_TRACKER_MAX_TOKENS,
   MIN_TRACKER_TIMEOUT_MS,
+  TRACKER_OUTPUT_MODES,
   runMigrationTracker,
   runTracker,
 } from "./tracker.js";
@@ -28,11 +30,10 @@ const DEFAULT_CONFIG = Object.freeze({
   connectionId: "",
   maxTokens: DEFAULT_TRACKER_MAX_TOKENS,
   timeoutMs: DEFAULT_TRACKER_TIMEOUT_MS,
-  promptWaitMs: 2_000,
+  outputMode: DEFAULT_TRACKER_OUTPUT_MODE,
 });
 
 const queues = new Map();
-const pendingByChat = new Map();
 const userByChat = new Map();
 const activeChatByUser = new Map();
 let interceptorRegistered = false;
@@ -76,6 +77,9 @@ function normalizeConfig(value) {
   return {
     enabled: source.enabled !== false,
     connectionId: typeof source.connectionId === "string" ? source.connectionId : "",
+    outputMode: TRACKER_OUTPUT_MODES.includes(source.outputMode)
+      ? source.outputMode
+      : DEFAULT_TRACKER_OUTPUT_MODE,
     maxTokens: boundedInteger(
       source.maxTokens,
       DEFAULT_TRACKER_MAX_TOKENS,
@@ -88,7 +92,6 @@ function normalizeConfig(value) {
       MIN_TRACKER_TIMEOUT_MS,
       MAX_TRACKER_TIMEOUT_MS,
     ),
-    promptWaitMs: boundedInteger(source.promptWaitMs, 2_000, 0, 5_000),
   };
 }
 
@@ -175,11 +178,13 @@ async function statusPayload(chatId, options = {}) {
   const store = await loadStore(chatId);
   let caseMessageId = null;
   let profileSaved = false;
+  let caseError = "";
   if (spindle.permissions.has("chat_mutation")) {
     try {
       const messages = await spindle.chat.getMessages(chatId);
       const transcript = deriveTranscriptContext(messages);
-      caseMessageId = transcript.caseMessageId;
+      caseMessageId = transcript.caseMessageId ?? transcript.invalidCaseMessageId;
+      caseError = transcript.caseError;
       profileSaved = Boolean(
         transcript.active &&
         store.caseText === transcript.caseText &&
@@ -199,6 +204,7 @@ async function statusPayload(chatId, options = {}) {
     processing: Boolean(store.processing),
     migrationRequired: Boolean(store.migrationRequired && !store.migrationAccepted),
     lastError: store.lastError || "",
+    lastWarning: store.lastWarning || "",
     revision: store.revision || 0,
     updatedAt: store.lastUpdatedAt || "",
   };
@@ -214,6 +220,14 @@ async function statusPayload(chatId, options = {}) {
     payload.level = "amber";
     payload.code = "error";
     payload.text = `Continuity Engine kept the last valid state: ${payload.lastError}`;
+  } else if (payload.lastWarning) {
+    payload.level = "amber";
+    payload.code = "recovered";
+    payload.text = `Continuity Engine updated state conservatively: ${payload.lastWarning}`;
+  } else if (caseError) {
+    payload.level = "amber";
+    payload.code = "invalid_profile";
+    payload.text = `Continuity Engine could not save the private profile: ${caseError}`;
   } else if (base.level === "green" && caseMessageId && !profileSaved) {
     payload.level = "amber";
     payload.code = "profile_saving";
@@ -254,7 +268,7 @@ async function performMigration(chatId, messages, context, store, config, userId
   const turns = listEligibleTurns(messages, context);
   const latest = turns.at(-1);
   if (!latest) throw new Error("No immersive assistant turn is available to migrate.");
-  const state = await runMigrationTracker(
+  const result = await runMigrationTracker(
     spindle,
     {
       caseText: context.caseText,
@@ -270,11 +284,13 @@ async function performMigration(chatId, messages, context, store, config, userId
   }
   store.checkpoints[latest.key] = {
     fingerprint: latest.fingerprint,
-    state,
+    state: result.state,
+    warnings: result.warnings,
     createdAt: new Date().toISOString(),
     migrated: true,
   };
-  store.current = state;
+  store.current = result.state;
+  store.lastWarning = result.warnings.join("; ").slice(0, 500);
   store.migrationAccepted = true;
   store.migrationRequired = false;
   store.migrationBaselineKey = latest.key;
@@ -297,13 +313,21 @@ async function reconcileChat(chatId, options = {}, userId) {
     store.processing = false;
     store.migrationRequired = false;
     store.lastError = "";
+    store.lastWarning = "";
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
     await publishStatus(chatId, {}, scopedUserId);
     return;
   }
 
+  // Stable profile persistence is deterministic and must not wait for tracker
+  // generation, provider availability, or structured-output repair.
   store.caseText = context.caseText;
+  store.processing = false;
+  await saveStore(chatId, store);
+  await mirrorStore(chatId, store, context);
+  await publishStatus(chatId, {}, scopedUserId);
+
   const nativeV14 = /\b(?:Date Simulator\s+)?v1\.4(?:\.\d+)?\b/i.test(context.caseText);
   if (!nativeV14 && !store.migrationAccepted && !options.allowMigration) {
     store.migrationRequired = true;
@@ -397,7 +421,7 @@ async function reconcileChat(chatId, options = {}, userId) {
           previousState = existing.state;
           continue;
         }
-        const state = await runTracker(
+        const result = await runTracker(
           spindle,
           {
             caseText: context.caseText,
@@ -414,10 +438,12 @@ async function reconcileChat(chatId, options = {}, userId) {
         }
         store.checkpoints[turn.key] = {
           fingerprint: turn.fingerprint,
-          state,
+          state: result.state,
+          warnings: result.warnings,
           createdAt: new Date().toISOString(),
         };
-        previousState = state;
+        previousState = result.state;
+        store.lastWarning = result.warnings.join("; ").slice(0, 500);
         store.revision += 1;
       }
 
@@ -450,20 +476,18 @@ function scheduleReconcile(chatId, options = {}, userId) {
     .catch((error) => spindle.log.error(`Continuity queue failed: ${String(error)}`))
     .finally(() => {
       if (queues.get(chatId) === current) queues.delete(chatId);
-      if (pendingByChat.get(chatId) === current) pendingByChat.delete(chatId);
     });
   queues.set(chatId, current);
-  pendingByChat.set(chatId, current);
   return current;
 }
 
-async function awaitPending(chatId, milliseconds) {
-  const pending = pendingByChat.get(chatId);
-  if (!pending || milliseconds <= 0) return;
-  await Promise.race([
-    pending.catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  ]);
+async function reconcileBeforePrompt(chatId) {
+  if (!chatId || !spindle.permissions.has("chat_mutation")) return false;
+  // Queue one verification pass even when an event-triggered update is already
+  // running. The follow-up pass is normally a zero-generation checkpoint hit,
+  // and closes races where prompt interception beats the message event.
+  await scheduleReconcile(chatId, {}, userForChat(chatId));
+  return true;
 }
 
 async function interceptPrompt(messages, context) {
@@ -471,7 +495,7 @@ async function interceptPrompt(messages, context) {
   const config = await loadConfig();
   if (!config.enabled) return messages;
   const chatId = context?.chatId;
-  if (chatId) await awaitPending(chatId, config.promptWaitMs);
+  if (chatId) await reconcileBeforePrompt(chatId);
 
   let caseText = "";
   let state = null;
@@ -603,7 +627,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
       chatId,
       ok,
       message: ok
-        ? `Reprocess complete at revision ${status.revision || 0}.`
+        ? status.lastWarning
+          ? `Reprocess complete at revision ${status.revision || 0} with conservative recovery: ${status.lastWarning}`
+          : `Reprocess complete at revision ${status.revision || 0}.`
         : status.lastError
           ? `Reprocess finished with a tracker error: ${status.lastError}`
           : "Reprocess cannot continue until this chat is migrated.",

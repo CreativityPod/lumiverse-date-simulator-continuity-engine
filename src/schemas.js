@@ -51,6 +51,13 @@ const RELATIONSHIP_KEYS = [
 ];
 const OBJECTIVE_KEYS = ["owner", "objective", "status"];
 
+function boundedStringSchema(maximumLength, { allowEmpty = false } = {}) {
+  return {
+    type: "string",
+    pattern: `^[\\s\\S]{${allowEmpty ? 0 : 1},${maximumLength}}$`,
+  };
+}
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -60,6 +67,16 @@ function hasExactKeys(value, keys) {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function keyValidationError(value, keys, path) {
+  if (!isPlainObject(value)) return `${path} must be an object`;
+  const actual = Object.keys(value);
+  const missing = keys.filter((key) => !actual.includes(key));
+  const extra = actual.filter((key) => !keys.includes(key));
+  if (missing.length) return `${path} is missing field${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`;
+  if (extra.length) return `${path} has unexpected field${extra.length === 1 ? "" : "s"}: ${extra.join(", ")}`;
+  return "";
 }
 
 function cleanText(value, maximumLength, { allowEmpty = false } = {}) {
@@ -76,26 +93,53 @@ function cleanText(value, maximumLength, { allowEmpty = false } = {}) {
   return cleaned;
 }
 
-function normalizeNpc(value) {
-  if (!hasExactKeys(value, NPC_KEYS)) return null;
-  const normalized = {};
-  for (const key of NPC_KEYS) {
-    const cleaned = cleanText(value[key], key === "name" ? 120 : 500);
-    if (cleaned === null) return null;
-    normalized[key] = cleaned;
+function textValidationError(value, maximumLength, path, { allowEmpty = false } = {}) {
+  if (typeof value !== "string") return `${path} must be a string`;
+  const cleaned = value.replace(/\r\n?/g, "\n").replace(/[\t ]+/g, " ").trim();
+  if (!allowEmpty && !cleaned) return `${path} must not be empty`;
+  if (cleaned.length > maximumLength) {
+    return `${path} is ${cleaned.length} characters; maximum is ${maximumLength}`;
   }
-  return normalized;
+  if (cleaned.includes("<!--") || cleaned.includes("-->") || /<\/?date_simulator_/i.test(cleaned)) {
+    return `${path} contains managed markup`;
+  }
+  return "";
 }
 
-function normalizeObjective(value) {
-  if (!hasExactKeys(value, OBJECTIVE_KEYS)) return null;
+function recoverText(value, maximumLength, { allowEmpty = false } = {}) {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/\r\n?/g, "\n").replace(/[\t ]+/g, " ").trim();
+  if ((!allowEmpty && !cleaned) || cleaned.includes("<!--") || cleaned.includes("-->") || /<\/?date_simulator_/i.test(cleaned)) {
+    return null;
+  }
+  return cleaned.slice(0, maximumLength);
+}
+
+function normalizeNpcDetailed(value, path = "arc.npcs[]") {
+  const keyError = keyValidationError(value, NPC_KEYS, path);
+  if (keyError) return { value: null, error: keyError };
   const normalized = {};
-  for (const key of OBJECTIVE_KEYS) {
-    const cleaned = cleanText(value[key], 500);
-    if (cleaned === null) return null;
+  for (const key of NPC_KEYS) {
+    const maximumLength = key === "name" ? 120 : 500;
+    const error = textValidationError(value[key], maximumLength, `${path}.${key}`);
+    if (error) return { value: null, error };
+    const cleaned = cleanText(value[key], maximumLength);
     normalized[key] = cleaned;
   }
-  return normalized;
+  return { value: normalized, error: "" };
+}
+
+function normalizeObjectiveDetailed(value, path = "arc.objectives[]") {
+  const keyError = keyValidationError(value, OBJECTIVE_KEYS, path);
+  if (keyError) return { value: null, error: keyError };
+  const normalized = {};
+  for (const key of OBJECTIVE_KEYS) {
+    const error = textValidationError(value[key], 500, `${path}.${key}`);
+    if (error) return { value: null, error };
+    const cleaned = cleanText(value[key], 500);
+    normalized[key] = cleaned;
+  }
+  return { value: normalized, error: "" };
 }
 
 export function cloneEmptyState() {
@@ -123,37 +167,32 @@ export function validateTrackerStateDetailed(candidate, options = {}) {
   );
   if (expectedSourceMessageId) allowedSourceMessageIds.add(expectedSourceMessageId);
   if (!isPlainObject(candidate)) return fail("response did not contain a JSON object");
-  if (!hasExactKeys(candidate, ROOT_KEYS)) {
-    return fail(`root keys must be exactly: ${ROOT_KEYS.join(", ")}`);
-  }
+  const rootKeyError = keyValidationError(candidate, ROOT_KEYS, "root");
+  if (rootKeyError) return fail(rootKeyError);
   if (candidate.schemaVersion !== TRACKER_SCHEMA_VERSION) {
     return fail(`schemaVersion must be the number ${TRACKER_SCHEMA_VERSION}`);
   }
-  if (!hasExactKeys(candidate.scene, SCENE_KEYS)) {
-    return fail(`scene keys must be exactly: ${SCENE_KEYS.join(", ")}`);
-  }
-  if (!hasExactKeys(candidate.scene.womanCurrent, WOMAN_KEYS)) {
-    return fail(`scene.womanCurrent keys must be exactly: ${WOMAN_KEYS.join(", ")}`);
-  }
-  if (!hasExactKeys(candidate.arc, ARC_KEYS)) {
-    return fail(`arc keys must be exactly: ${ARC_KEYS.join(", ")}`);
-  }
-  if (!hasExactKeys(candidate.arc.relationship, RELATIONSHIP_KEYS)) {
-    return fail(`arc.relationship keys must be exactly: ${RELATIONSHIP_KEYS.join(", ")}`);
-  }
+  const sceneKeyError = keyValidationError(candidate.scene, SCENE_KEYS, "scene");
+  if (sceneKeyError) return fail(sceneKeyError);
+  const womanKeyError = keyValidationError(candidate.scene.womanCurrent, WOMAN_KEYS, "scene.womanCurrent");
+  if (womanKeyError) return fail(womanKeyError);
+  const arcKeyError = keyValidationError(candidate.arc, ARC_KEYS, "arc");
+  if (arcKeyError) return fail(arcKeyError);
+  const relationshipKeyError = keyValidationError(candidate.arc.relationship, RELATIONSHIP_KEYS, "arc.relationship");
+  if (relationshipKeyError) return fail(relationshipKeyError);
 
   const normalized = cloneEmptyState();
   for (const key of SCENE_KEYS.filter((key) => key !== "womanCurrent")) {
     const maximumLength = key === "spatial" ? 1_200 : key === "manVisible" ? 1_000 : 700;
+    const error = textValidationError(candidate.scene[key], maximumLength, `scene.${key}`);
+    if (error) return fail(error);
     const cleaned = cleanText(candidate.scene[key], maximumLength);
-    if (cleaned === null) return fail(`scene.${key} must be a nonempty bounded string`);
     normalized.scene[key] = cleaned;
   }
   for (const key of WOMAN_KEYS) {
+    const error = textValidationError(candidate.scene.womanCurrent[key], 1_000, `scene.womanCurrent.${key}`);
+    if (error) return fail(error);
     const cleaned = cleanText(candidate.scene.womanCurrent[key], 1_000);
-    if (cleaned === null) {
-      return fail(`scene.womanCurrent.${key} must be a nonempty bounded string`);
-    }
     normalized.scene.womanCurrent[key] = cleaned;
   }
 
@@ -162,17 +201,16 @@ export function validateTrackerStateDetailed(candidate, options = {}) {
   }
   for (let index = 0; index < candidate.arc.npcs.length; index += 1) {
     const npc = candidate.arc.npcs[index];
-    const normalizedNpc = normalizeNpc(npc);
-    if (!normalizedNpc) return fail(`arc.npcs[${index}] has missing, extra, empty, or oversized fields`);
-    normalized.arc.npcs.push(normalizedNpc);
+    const result = normalizeNpcDetailed(npc, `arc.npcs[${index}]`);
+    if (!result.value) return fail(result.error);
+    normalized.arc.npcs.push(result.value);
   }
 
   for (const key of RELATIONSHIP_KEYS) {
     const allowEmpty = key === "latestChange" || key === "sourceMessageId";
+    const error = textValidationError(candidate.arc.relationship[key], 1_000, `arc.relationship.${key}`, { allowEmpty });
+    if (error) return fail(error);
     const cleaned = cleanText(candidate.arc.relationship[key], 1_000, { allowEmpty });
-    if (cleaned === null) {
-      return fail(`arc.relationship.${key} must be a bounded string`);
-    }
     normalized.arc.relationship[key] = cleaned;
   }
   const latestChange = normalized.arc.relationship.latestChange;
@@ -189,11 +227,9 @@ export function validateTrackerStateDetailed(candidate, options = {}) {
   }
   for (let index = 0; index < candidate.arc.objectives.length; index += 1) {
     const objective = candidate.arc.objectives[index];
-    const normalizedObjective = normalizeObjective(objective);
-    if (!normalizedObjective) {
-      return fail(`arc.objectives[${index}] has missing, extra, empty, or oversized fields`);
-    }
-    normalized.arc.objectives.push(normalizedObjective);
+    const result = normalizeObjectiveDetailed(objective, `arc.objectives[${index}]`);
+    if (!result.value) return fail(result.error);
+    normalized.arc.objectives.push(result.value);
   }
 
   const encoded = JSON.stringify(normalized);
@@ -205,6 +241,186 @@ export function validateTrackerState(candidate, options = {}) {
   return validateTrackerStateDetailed(candidate, options).state;
 }
 
+function extraKeys(value, keys) {
+  return isPlainObject(value) ? Object.keys(value).filter((key) => !keys.includes(key)) : [];
+}
+
+function previousOrEmpty(previousState) {
+  if (!previousState) return cloneEmptyState();
+  return validateTrackerState(previousState, {
+    sourceMessageId: previousState.arc?.relationship?.sourceMessageId || undefined,
+  }) ?? cloneEmptyState();
+}
+
+export function recoverTrackerStateDetailed(candidate, options = {}) {
+  const fail = (error) => ({ state: null, error, warnings: [] });
+  if (!isPlainObject(candidate)) return fail("response did not contain a JSON object");
+  if (candidate.schemaVersion !== TRACKER_SCHEMA_VERSION) {
+    return fail(`schemaVersion must be the number ${TRACKER_SCHEMA_VERSION}`);
+  }
+  if (!isPlainObject(candidate.scene)) return fail("scene must be an object");
+  if (!isPlainObject(candidate.arc)) return fail("arc must be an object");
+
+  const baseline = previousOrEmpty(options.previousState);
+  const normalized = structuredClone(baseline);
+  normalized.schemaVersion = TRACKER_SCHEMA_VERSION;
+  const warnings = [];
+  let usableParts = 0;
+  const noteExtras = (value, keys, path) => {
+    const extras = extraKeys(value, keys);
+    if (extras.length) warnings.push(`${path} ignored unexpected fields: ${extras.join(", ")}`);
+  };
+  noteExtras(candidate, ROOT_KEYS, "root");
+  noteExtras(candidate.scene, SCENE_KEYS, "scene");
+  noteExtras(candidate.arc, ARC_KEYS, "arc");
+
+  for (const key of SCENE_KEYS.filter((key) => key !== "womanCurrent")) {
+    const maximumLength = key === "spatial" ? 1_200 : key === "manVisible" ? 1_000 : 700;
+    const recovered = recoverText(candidate.scene[key], maximumLength);
+    if (recovered === null) {
+      warnings.push(`scene.${key} was invalid; preserved the previous value`);
+    } else {
+      if (String(candidate.scene[key]).trim().length > maximumLength) {
+        warnings.push(`scene.${key} was oversized and was truncated to ${maximumLength} characters`);
+      }
+      normalized.scene[key] = recovered;
+      usableParts += 1;
+    }
+  }
+
+  if (!isPlainObject(candidate.scene.womanCurrent)) {
+    warnings.push("scene.womanCurrent was invalid; preserved the previous section");
+  } else {
+    noteExtras(candidate.scene.womanCurrent, WOMAN_KEYS, "scene.womanCurrent");
+    for (const key of WOMAN_KEYS) {
+      const recovered = recoverText(candidate.scene.womanCurrent[key], 1_000);
+      if (recovered === null) {
+        warnings.push(`scene.womanCurrent.${key} was invalid; preserved the previous value`);
+      } else {
+        if (String(candidate.scene.womanCurrent[key]).trim().length > 1_000) {
+          warnings.push(`scene.womanCurrent.${key} was oversized and was truncated to 1000 characters`);
+        }
+        normalized.scene.womanCurrent[key] = recovered;
+        usableParts += 1;
+      }
+    }
+  }
+
+  if (!Array.isArray(candidate.arc.npcs)) {
+    warnings.push("arc.npcs was invalid; preserved the previous NPC list");
+  } else {
+    const recoveredNpcs = [];
+    let npcError = "";
+    for (let index = 0; index < Math.min(candidate.arc.npcs.length, 24); index += 1) {
+      const npc = candidate.arc.npcs[index];
+      if (!isPlainObject(npc)) {
+        npcError = `arc.npcs[${index}] must be an object`;
+        break;
+      }
+      const npcExtras = extraKeys(npc, NPC_KEYS);
+      if (npcExtras.length) warnings.push(`arc.npcs[${index}] ignored unexpected fields: ${npcExtras.join(", ")}`);
+      const recoveredNpc = {};
+      for (const key of NPC_KEYS) {
+        const maximumLength = key === "name" ? 120 : 500;
+        const value = recoverText(npc[key], maximumLength);
+        if (value === null) {
+          npcError = textValidationError(npc[key], maximumLength, `arc.npcs[${index}].${key}`);
+          break;
+        }
+        if (String(npc[key]).trim().length > maximumLength) {
+          warnings.push(`arc.npcs[${index}].${key} was oversized and was truncated to ${maximumLength} characters`);
+        }
+        recoveredNpc[key] = value;
+      }
+      if (npcError) break;
+      recoveredNpcs.push(recoveredNpc);
+    }
+    if (npcError) {
+      warnings.push(`${npcError}; preserved the previous NPC list`);
+    } else {
+      if (candidate.arc.npcs.length > 24) warnings.push("arc.npcs exceeded 24 entries and was truncated");
+      normalized.arc.npcs = recoveredNpcs;
+      usableParts += 1;
+    }
+  }
+
+  if (!isPlainObject(candidate.arc.relationship)) {
+    warnings.push("arc.relationship was invalid; preserved the previous relationship");
+  } else {
+    noteExtras(candidate.arc.relationship, RELATIONSHIP_KEYS, "arc.relationship");
+    const recoveredRelationship = { ...normalized.arc.relationship };
+    for (const key of RELATIONSHIP_KEYS) {
+      const allowEmpty = key === "latestChange" || key === "sourceMessageId";
+      const recovered = recoverText(candidate.arc.relationship[key], 1_000, { allowEmpty });
+      if (recovered === null) {
+        warnings.push(`arc.relationship.${key} was invalid; preserved the previous value`);
+      } else {
+        if (String(candidate.arc.relationship[key]).trim().length > 1_000) {
+          warnings.push(`arc.relationship.${key} was oversized and was truncated to 1000 characters`);
+        }
+        recoveredRelationship[key] = recovered;
+      }
+    }
+    const allowedSourceMessageIds = new Set(
+      (options.allowedSourceMessageIds ?? []).map((value) => String(value ?? "")).filter(Boolean),
+    );
+    if (options.sourceMessageId) allowedSourceMessageIds.add(String(options.sourceMessageId));
+    const invalidSource = recoveredRelationship.latestChange
+      ? allowedSourceMessageIds.size > 0 && !allowedSourceMessageIds.has(recoveredRelationship.sourceMessageId)
+      : Boolean(recoveredRelationship.sourceMessageId);
+    if (invalidSource) {
+      warnings.push("arc.relationship source linkage was invalid; preserved the previous relationship");
+    } else {
+      normalized.arc.relationship = recoveredRelationship;
+      usableParts += 1;
+    }
+  }
+
+  if (!Array.isArray(candidate.arc.objectives)) {
+    warnings.push("arc.objectives was invalid; preserved the previous objectives");
+  } else {
+    const recoveredObjectives = [];
+    let objectiveError = "";
+    for (let index = 0; index < Math.min(candidate.arc.objectives.length, 3); index += 1) {
+      const objective = candidate.arc.objectives[index];
+      if (!isPlainObject(objective)) {
+        objectiveError = `arc.objectives[${index}] must be an object`;
+        break;
+      }
+      const objectiveExtras = extraKeys(objective, OBJECTIVE_KEYS);
+      if (objectiveExtras.length) {
+        warnings.push(`arc.objectives[${index}] ignored unexpected fields: ${objectiveExtras.join(", ")}`);
+      }
+      const recoveredObjective = {};
+      for (const key of OBJECTIVE_KEYS) {
+        const value = recoverText(objective[key], 500);
+        if (value === null) {
+          objectiveError = textValidationError(objective[key], 500, `arc.objectives[${index}].${key}`);
+          break;
+        }
+        if (String(objective[key]).trim().length > 500) {
+          warnings.push(`arc.objectives[${index}].${key} was oversized and was truncated to 500 characters`);
+        }
+        recoveredObjective[key] = value;
+      }
+      if (objectiveError) break;
+      recoveredObjectives.push(recoveredObjective);
+    }
+    if (objectiveError) {
+      warnings.push(`${objectiveError}; preserved the previous objectives`);
+    } else {
+      if (candidate.arc.objectives.length > 3) warnings.push("arc.objectives exceeded 3 entries and was truncated");
+      normalized.arc.objectives = recoveredObjectives;
+      usableParts += 1;
+    }
+  }
+
+  if (usableParts === 0) return fail("response contained no usable tracker fields");
+  const validated = validateTrackerStateDetailed(normalized, options);
+  if (!validated.state) return fail(`recovered state remained invalid: ${validated.error}`);
+  return { state: validated.state, error: "", warnings };
+}
+
 export const TRACKER_JSON_SCHEMA = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -214,19 +430,21 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
       type: "object",
       additionalProperties: false,
       properties: {
-        date: { type: "string" },
-        time: { type: "string" },
-        weather: { type: "string" },
-        location: { type: "string" },
-        immediateContext: { type: "string" },
+        date: boundedStringSchema(700),
+        time: boundedStringSchema(700),
+        weather: boundedStringSchema(700),
+        location: boundedStringSchema(700),
+        immediateContext: boundedStringSchema(700),
         womanCurrent: {
           type: "object",
           additionalProperties: false,
-          properties: Object.fromEntries(WOMAN_KEYS.map((key) => [key, { type: "string" }])),
+          properties: Object.fromEntries(
+            WOMAN_KEYS.map((key) => [key, boundedStringSchema(1_000)]),
+          ),
           required: WOMAN_KEYS,
         },
-        manVisible: { type: "string" },
-        spatial: { type: "string" },
+        manVisible: boundedStringSchema(1_000),
+        spatial: boundedStringSchema(1_200),
       },
       required: SCENE_KEYS,
     },
@@ -240,7 +458,12 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
           items: {
             type: "object",
             additionalProperties: false,
-            properties: Object.fromEntries(NPC_KEYS.map((key) => [key, { type: "string" }])),
+            properties: Object.fromEntries(
+              NPC_KEYS.map((key) => [
+                key,
+                boundedStringSchema(key === "name" ? 120 : 500),
+              ]),
+            ),
             required: NPC_KEYS,
           },
         },
@@ -248,7 +471,12 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
           type: "object",
           additionalProperties: false,
           properties: Object.fromEntries(
-            RELATIONSHIP_KEYS.map((key) => [key, { type: "string" }]),
+            RELATIONSHIP_KEYS.map((key) => [
+              key,
+              boundedStringSchema(1_000, {
+                allowEmpty: key === "latestChange" || key === "sourceMessageId",
+              }),
+            ]),
           ),
           required: RELATIONSHIP_KEYS,
         },
@@ -259,7 +487,7 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
             type: "object",
             additionalProperties: false,
             properties: Object.fromEntries(
-              OBJECTIVE_KEYS.map((key) => [key, { type: "string" }]),
+              OBJECTIVE_KEYS.map((key) => [key, boundedStringSchema(500)]),
             ),
             required: OBJECTIVE_KEYS,
           },

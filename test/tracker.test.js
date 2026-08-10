@@ -42,6 +42,10 @@ test("uses native structured output only for recognized providers", () => {
     ["schemaVersion", "scene", "arc"],
   );
   assert.equal(trackerTest.generationTools({ provider: "openai" }), undefined);
+  assert.equal(trackerTest.resolveOutputMode({ provider: "custom" }, "auto"), "plain");
+  assert.equal(trackerTest.resolveOutputMode({ provider: "custom" }, "openai"), "openai");
+  assert.ok(trackerTest.generationParameters({ provider: "custom" }, "openai").response_format);
+  assert.equal(trackerTest.generationTools({ provider: "openai" }, "anthropic")[0].name, "record_date_simulator_state");
 });
 
 test("retries one rejected tracker response with the validation reason", async () => {
@@ -73,9 +77,72 @@ test("retries one rejected tracker response with the validation reason", async (
     { connectionId: "", maxTokens: 800, timeoutMs: 5_000 },
     "user-1",
   );
-  assert.deepEqual(result, state);
+  assert.deepEqual(result, { state, warnings: [] });
   assert.equal(requests.length, 2);
-  assert.match(requests[1].messages.at(-1).content, /root keys must be exactly/);
+  assert.match(requests[1].messages.at(-1).content, /scene must be an object/);
+  assert.equal(requests[1].messages.at(-2).role, "assistant");
+  assert.equal(requests[1].messages.at(-2).content, '{"schemaVersion":1}');
+});
+
+test("repairs a structurally empty state instead of treating defaults as an update", async () => {
+  const state = cloneEmptyState();
+  state.scene.location = "Station concourse";
+  const requests = [];
+  const spindleApi = {
+    connections: { list: async () => [{ id: "local", provider: "openai-compatible", is_default: true }] },
+    generate: {
+      quiet: async (input) => {
+        requests.push(input);
+        return requests.length === 1
+          ? { content: '{"schemaVersion":1,"scene":{},"arc":{}}', finish_reason: "stop" }
+          : { content: JSON.stringify(state), finish_reason: "stop" };
+      },
+    },
+  };
+  const result = await runTracker(
+    spindleApi,
+    {
+      caseText: "CASE",
+      previousState: null,
+      userText: "Where are we?",
+      assistantText: "The concourse remains crowded.",
+      sourceMessageId: "a1",
+    },
+    { connectionId: "", outputMode: "auto", maxTokens: 2_000, timeoutMs: 5_000 },
+    "user-1",
+  );
+  assert.equal(requests.length, 2);
+  assert.deepEqual(result, { state, warnings: [] });
+  assert.match(requests[1].messages.at(-1).content, /no usable tracker fields/);
+});
+
+test("accepts a conservative objective fallback without a second model call", async () => {
+  const previousState = cloneEmptyState();
+  previousState.arc.objectives = [{ owner: "Elena", objective: "Confirm dinner.", status: "active" }];
+  const candidate = structuredClone(previousState);
+  candidate.scene.time = "8:15 PM";
+  candidate.arc.objectives[0].status = "";
+  let calls = 0;
+  const spindleApi = {
+    connections: { list: async () => [{ id: "local", provider: "openai-compatible", is_default: true }] },
+    generate: { quiet: async () => { calls += 1; return { content: JSON.stringify(candidate), finish_reason: "stop" }; } },
+  };
+  const result = await runTracker(
+    spindleApi,
+    {
+      caseText: "CASE",
+      previousState,
+      userText: "Continue.",
+      assistantText: "She checks the time.",
+      sourceMessageId: "a2",
+    },
+    { connectionId: "", outputMode: "auto", maxTokens: 2_000, timeoutMs: 5_000 },
+    "user-1",
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.state.scene.time, "8:15 PM");
+  assert.deepEqual(result.state.arc.objectives, previousState.arc.objectives);
+  assert.match(result.warnings.join("; "), /status must not be empty/);
 });
 
 test("accepts a forced Anthropic tracker tool call", async () => {
@@ -122,7 +189,7 @@ test("accepts a forced Anthropic tracker tool call", async () => {
     { connectionId: "", maxTokens: 800, timeoutMs: 5_000 },
     "user-1",
   );
-  assert.deepEqual(result, state);
+  assert.deepEqual(result, { state, warnings: [] });
   await runTracker(
     spindleApi,
     trackerInput,

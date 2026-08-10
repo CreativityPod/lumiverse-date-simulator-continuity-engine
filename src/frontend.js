@@ -74,6 +74,18 @@ export function setup(ctx) {
   const connection = document.createElement("select");
   const connectionStatus = document.createElement("div");
   connectionStatus.className = "dsc-hint";
+  const outputMode = document.createElement("select");
+  for (const [value, label] of [
+    ["auto", "Auto detect from connection"],
+    ["openai", "OpenAI-compatible JSON Schema"],
+    ["anthropic", "Anthropic forced tool"],
+    ["plain", "Plain JSON"],
+  ]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    outputMode.appendChild(option);
+  }
   const maxTokens = document.createElement("input");
   maxTokens.type = "number";
   maxTokens.min = "400";
@@ -86,6 +98,7 @@ export function setup(ctx) {
     createLabeledControl("Tracking enabled", enabled),
     createLabeledControl("Tracker connection", connection),
     connectionStatus,
+    createLabeledControl("Structured output mode", outputMode),
     createLabeledControl("Maximum tracker output tokens", maxTokens),
     createLabeledControl("Tracker timeout in seconds", timeout),
   );
@@ -142,9 +155,9 @@ export function setup(ctx) {
         config: {
           enabled: enabled.checked,
           connectionId: connection.value,
+          outputMode: outputMode.value,
           maxTokens: Number(maxTokens.value),
           timeoutMs: Number(timeout.value) * 1_000,
-          promptWaitMs: latestStatus?.config?.promptWaitMs ?? 2_000,
         },
       });
     }),
@@ -222,16 +235,27 @@ export function setup(ctx) {
     const bubble = ctx.dom.findMessageElement(status.caseMessageId);
     if (!bubble) return;
     const badge = bubble.querySelector(".ds-tracker-status");
+    const label = bubble.querySelector(".ds-state-label");
     if (badge) {
       badge.dataset.engineLevel = status.level;
       badge.textContent = status.text;
     }
     const button = bubble.querySelector(".ds-state-button");
     if (button) {
-      button.disabled = Boolean(status.profileSaved);
       if (status.profileSaved) {
+        button.hidden = true;
+        button.disabled = true;
         button.dataset.lumiverseRegexActionUsed = "true";
-        button.textContent = "Private Profile Saved";
+        if (label) label.textContent = "Private profile saved";
+      } else {
+        button.hidden = false;
+        button.disabled = false;
+        button.textContent = "Save Manually";
+        if (label) {
+          label.textContent = status.code === "profile_saving"
+            ? "Saving private profile…"
+            : "Private profile ready";
+        }
       }
     }
   }
@@ -245,6 +269,7 @@ export function setup(ctx) {
       ? `Revision ${status.revision || 0}${status.updatedAt ? ` · ${status.updatedAt}` : ""}`
       : "No active chat.";
     enabled.checked = status.config?.enabled !== false;
+    outputMode.value = status.config?.outputMode ?? "auto";
     maxTokens.value = String(status.config?.maxTokens ?? 2_000);
     timeout.value = String(Math.round((status.config?.timeoutMs ?? 45_000) / 1_000));
     renderConnections();

@@ -2,7 +2,7 @@ import {
   TRACKER_JSON_SCHEMA,
   TRACKER_SCHEMA_VERSION,
   cloneEmptyState,
-  validateTrackerStateDetailed,
+  recoverTrackerStateDetailed,
 } from "./schemas.js";
 
 export const DEFAULT_TRACKER_TIMEOUT_MS = 45_000;
@@ -11,6 +11,8 @@ export const MAX_TRACKER_TIMEOUT_MS = 300_000;
 export const DEFAULT_TRACKER_MAX_TOKENS = 2_000;
 export const MIN_TRACKER_MAX_TOKENS = 400;
 export const MAX_TRACKER_MAX_TOKENS = 2_000;
+export const DEFAULT_TRACKER_OUTPUT_MODE = "auto";
+export const TRACKER_OUTPUT_MODES = Object.freeze(["auto", "openai", "anthropic", "plain"]);
 
 function normalizeTrackerTimeoutMs(value) {
   const parsed = Number(value);
@@ -88,18 +90,27 @@ function extractJson(text) {
   return null;
 }
 
-function generationParameters(connection) {
-  const base = { temperature: 0, top_p: 0.1, max_tokens: DEFAULT_TRACKER_MAX_TOKENS };
+function resolveOutputMode(connection, requestedMode = DEFAULT_TRACKER_OUTPUT_MODE) {
+  if (TRACKER_OUTPUT_MODES.includes(requestedMode) && requestedMode !== "auto") return requestedMode;
   const provider = String(connection?.provider ?? "").toLowerCase();
-  if (provider.includes("google") || provider.includes("gemini")) {
-    return { ...base, responseMimeType: "application/json", responseSchema: TRACKER_JSON_SCHEMA };
-  }
+  if (provider.includes("google") || provider.includes("gemini")) return "google";
+  if (provider.includes("anthropic") || provider.includes("claude")) return "anthropic";
   if (
     provider.includes("openai") ||
     provider.includes("openrouter") ||
     provider.includes("nanogpt") ||
     provider.includes("deepseek")
-  ) {
+  ) return "openai";
+  return "plain";
+}
+
+function generationParameters(connection, outputMode = DEFAULT_TRACKER_OUTPUT_MODE) {
+  const base = { temperature: 0, top_p: 0.1, max_tokens: DEFAULT_TRACKER_MAX_TOKENS };
+  const mode = resolveOutputMode(connection, outputMode);
+  if (mode === "google") {
+    return { ...base, responseMimeType: "application/json", responseSchema: TRACKER_JSON_SCHEMA };
+  }
+  if (mode === "openai") {
     return {
       ...base,
       response_format: {
@@ -112,7 +123,7 @@ function generationParameters(connection) {
       },
     };
   }
-  if (provider.includes("anthropic") || provider.includes("claude")) {
+  if (mode === "anthropic") {
     return {
       ...base,
       tool_choice: { type: "tool", name: "record_date_simulator_state" },
@@ -121,9 +132,8 @@ function generationParameters(connection) {
   return base;
 }
 
-function generationTools(connection) {
-  const provider = String(connection?.provider ?? "").toLowerCase();
-  if (!provider.includes("anthropic") && !provider.includes("claude")) return undefined;
+function generationTools(connection, outputMode = DEFAULT_TRACKER_OUTPUT_MODE) {
+  if (resolveOutputMode(connection, outputMode) !== "anthropic") return undefined;
   return [
     {
       name: "record_date_simulator_state",
@@ -160,7 +170,7 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       type: "quiet",
       messages: attemptMessages,
       parameters: {
-        ...generationParameters(connection),
+        ...generationParameters(connection, config.outputMode),
         max_tokens: Math.max(
           MIN_TRACKER_MAX_TOKENS,
           Math.min(
@@ -172,7 +182,7 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       reasoning: { source: "off" },
       signal: AbortSignal.timeout(normalizeTrackerTimeoutMs(config.timeoutMs)),
     };
-    const tools = generationTools(connection);
+    const tools = generationTools(connection, config.outputMode);
     if (tools) input.tools = tools;
     // Lumiverse scopes direct generation through GenerationRequestDTO.userId.
     // Connection profile methods instead accept userId as a positional argument.
@@ -187,18 +197,33 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
     const parsed = toolState && typeof toolState === "object"
       ? toolState
       : extractJson(toolState ?? response?.content);
-    return validateTrackerStateDetailed(parsed, { allowedSourceMessageIds });
+    return {
+      parsed,
+      validation: recoverTrackerStateDetailed(parsed, { previousState, allowedSourceMessageIds }),
+    };
   };
 
   let response = await spindleApi.generate.quiet(makeRequest(messages));
-  let validation = validateResponse(response);
+  let { parsed, validation } = validateResponse(response);
   if (!validation.state) {
+    const rejectedText = parsed && typeof parsed === "object"
+      ? JSON.stringify(parsed)
+      : String(response?.content ?? "").trim();
     const repairPrompt = {
       role: "user",
-      content: `Your prior tracker result was rejected because ${validation.error}. Retry once. Return the complete compact schema object, include every required field, preserve canonical facts, use Unknown rather than guessing, and return no prose or markdown.`,
+      content: `Repair the rejected tracker object because: ${validation.error}.
+
+Return one complete replacement object. It must conform to this JSON Schema:
+${JSON.stringify(TRACKER_JSON_SCHEMA)}
+
+Preserve canonical facts, use Unknown rather than guessing, and return no prose or markdown.`,
     };
-    response = await spindleApi.generate.quiet(makeRequest([...messages, repairPrompt]));
-    validation = validateResponse(response);
+    const rejectedAssistant = {
+      role: "assistant",
+      content: rejectedText || "[The prior response contained no usable JSON object.]",
+    };
+    response = await spindleApi.generate.quiet(makeRequest([...messages, rejectedAssistant, repairPrompt]));
+    ({ validation } = validateResponse(response));
   }
   if (!validation.state) {
     const finishReason = String(response?.finish_reason ?? "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_");
@@ -208,7 +233,7 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       `Tracker state rejected after repair: ${validation.error}; finish=${finishReason}; contentChars=${contentLength}; toolCalls=${toolCallCount}.`,
     );
   }
-  return validation.state;
+  return { state: validation.state, warnings: validation.warnings ?? [] };
 }
 
 export async function runTracker(spindleApi, input, config, userId) {
@@ -243,6 +268,7 @@ export const trackerTest = Object.freeze({
   extractJson,
   generationParameters,
   generationTools,
+  resolveOutputMode,
   trackerUserPrompt,
   migrationUserPrompt,
   normalizeTrackerTimeoutMs,

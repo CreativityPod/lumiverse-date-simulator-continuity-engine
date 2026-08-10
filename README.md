@@ -13,7 +13,7 @@ An optional Lumiverse extension for Date Simulator v1.4. It runs a small backgro
 
 1. In Lumiverse, install the extension from `https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine`.
 2. Grant `generation`, `interceptor`, and `chat_mutation` permissions.
-3. Open the **Continuity** drawer and optionally select a tracker connection. With no selection, the active default connection is used.
+3. Open the **Continuity** drawer and optionally select a tracker connection and structured-output mode. With no selection, the active default connection and automatic provider detection are used.
 4. Import the v1.4 regex companion so the private-profile warning card and reset action render correctly.
 
 ## What it tracks
@@ -24,10 +24,20 @@ Arc: relevant recurring NPCs, current relationship, active boundary or concern, 
 
 ## Status behavior
 
-The profile card is amber by default because a regex script cannot itself prove that an extension is running. Once the backend and frontend are ready, the extension updates that card:
+The profile card is amber by default because a regex script cannot itself prove that an extension is running. Once the backend and frontend are ready, the extension validates and saves the stable profile locally before starting tracker generation, then updates that card:
 
 - Green: private profile saved; automatic scene and arc tracking is ready.
 - Amber: disabled, missing permission, processing, migration required, or using the last valid state after an error.
+
+The manual profile action is only a no-extension or missing-permission fallback. With a functioning engine, no per-case click is required.
+
+## Turn and recovery behavior
+
+The tracker starts after every eligible assistant response. Before the next roleplay generation, the prompt interceptor queues a verification pass and waits for reconciliation of the latest completed assistant turn to finish. Each provider request is bounded by the configured tracker timeout; a failed request retains the last valid state and marks the engine degraded.
+
+Tracker output is normalized conservatively and then passed through the strict validator before commit. Invalid leaf fields preserve their previous values, oversized safe text is truncated, malformed NPC or objective collections preserve the previous collection, and unsupported relationship source linkage preserves the previous relationship. A repair call is reserved for structurally unusable output.
+
+Structured-output modes are **Auto**, **OpenAI-compatible JSON Schema**, **Anthropic Tool**, and **Plain JSON**. Auto uses Lumiverse connection metadata; it does not probe the provider with an extra generation.
 
 The Continuity drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, and explicit v1.3.1 migration.
 
@@ -42,6 +52,7 @@ The Continuity drawer also permits private-state inspection, reprocessing the la
 - Version 1.0.5 uses Lumiverse's normalized top-level tool schema for Claude connections, retries one schema-rejected tracker result, and reports the exact rejected field without exposing private state.
 - Version 1.0.6 raises the fresh-install tracker output ceiling default from 1,200 to 2,000 tokens for more reliable complete JSON from local and long-haul trackers.
 - Version 1.0.7 adds visible started, completed, no-chat, and tracker-error feedback for Reprocess Latest Turn and migration actions.
+- Version 1.0.8 saves stable profiles before tracker generation, adds a strict next-turn checkpoint barrier, supports explicit output modes, aligns provider constraints with runtime validation, reports exact field diagnostics, and conservatively recovers valid state sections without spending a repair call on a malformed optional objective.
 
 ## Development
 

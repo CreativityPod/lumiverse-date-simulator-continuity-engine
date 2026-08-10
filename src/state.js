@@ -32,28 +32,41 @@ function normalizeNewlines(value) {
   return String(value ?? "").replace(/\r\n?/g, "\n");
 }
 
-function validateFlatCapsule(body, fields, maximumLength) {
+function validateFlatCapsuleDetailed(body, fields, maximumLength) {
   const normalized = normalizeNewlines(body).trim();
-  if (!normalized || normalized.length > maximumLength) return null;
-  if (normalized.includes("<!--") || normalized.includes("-->")) return null;
+  if (!normalized) return { value: null, error: "The private profile is empty." };
+  if (normalized.length > maximumLength) {
+    return { value: null, error: `The private profile exceeds ${maximumLength} characters.` };
+  }
+  if (normalized.includes("<!--") || normalized.includes("-->")) {
+    return { value: null, error: "The private profile contains nested managed markup." };
+  }
   const lines = normalized
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length !== fields.length) return null;
+  if (lines.length !== fields.length) {
+    return { value: null, error: `The private profile must contain exactly ${fields.length} populated fields.` };
+  }
   const result = [];
   for (let index = 0; index < fields.length; index += 1) {
     const prefix = `${fields[index]}:`;
-    if (!lines[index].startsWith(prefix)) return null;
+    if (!lines[index].startsWith(prefix)) {
+      return { value: null, error: `Expected private-profile field ${fields[index]} at position ${index + 1}.` };
+    }
     const value = lines[index].slice(prefix.length).trim();
-    if (!value) return null;
+    if (!value) return { value: null, error: `Private-profile field ${fields[index]} is empty.` };
     result.push(`${prefix} ${value}`);
   }
-  return result.join("\n");
+  return { value: result.join("\n"), error: "" };
 }
 
 export function validateCaseCapsule(body) {
-  return validateFlatCapsule(body, CASE_FIELDS, 24_000);
+  return validateCaseCapsuleDetailed(body).value;
+}
+
+export function validateCaseCapsuleDetailed(body) {
+  return validateFlatCapsuleDetailed(body, CASE_FIELDS, 24_000);
 }
 
 export function contentToText(content) {
@@ -127,6 +140,8 @@ export function deriveTranscriptContext(messages) {
   let resetIndex = -1;
   let epoch = 0;
   let invalidCases = 0;
+  let caseError = "";
+  let invalidCaseMessageId = null;
 
   for (let index = 0; index < (messages ?? []).length; index += 1) {
     const message = messages[index];
@@ -155,16 +170,21 @@ export function deriveTranscriptContext(messages) {
         caseMessageId = null;
         caseMessageIndex = -1;
         legacySceneText = null;
+        invalidCaseMessageId = null;
       } else if (marker.kind === "case") {
-        const validated = validateCaseCapsule(marker.body);
-        if (!validated) {
+        const validation = validateCaseCapsuleDetailed(marker.body);
+        if (!validation.value) {
           invalidCases += 1;
+          caseError = validation.error;
+          invalidCaseMessageId = String(message.id ?? "");
           continue;
         }
-        caseText = validated;
+        caseText = validation.value;
         caseMessageId = String(message.id ?? "");
         caseMessageIndex = index;
         legacySceneText = null;
+        caseError = "";
+        invalidCaseMessageId = null;
       } else if (marker.kind === "scene" && caseText) {
         legacySceneText = normalizeNewlines(marker.body).trim();
       }
@@ -182,6 +202,8 @@ export function deriveTranscriptContext(messages) {
     epoch,
     epochKey: `${epoch}:${resetMessageId ?? "root"}:${caseMessageId ?? "none"}`,
     invalidCases,
+    caseError,
+    invalidCaseMessageId,
     migrationRequired: Boolean(caseText && legacySceneText),
   };
 }
@@ -249,6 +271,7 @@ export function createStore(chatId) {
     migrationBaselineFingerprint: "",
     processing: false,
     lastError: "",
+    lastWarning: "",
     lastUpdatedAt: "",
   };
 }

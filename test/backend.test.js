@@ -20,13 +20,13 @@ test("background reconciliation saves state and the interceptor injects one bran
   const frontendMessages = [];
   const messages = [
     { id: "u0", role: "user", content: "Surprise me" },
-    {
-      id: "a0",
-      role: "assistant",
-      swipe_id: 0,
-      content: `She looks up from her coffee.\n<!--DATE_SIM_CASE\n${CASE}\nEND_DATE_SIM_CASE-->`,
-    },
   ];
+  const opening = {
+    id: "a0",
+    role: "assistant",
+    swipe_id: 0,
+    content: `She looks up from her coffee.\n<!--DATE_SIM_CASE\n${CASE}\nEND_DATE_SIM_CASE-->`,
+  };
   let interceptor;
   let interceptorPriority;
   let frontendHandler;
@@ -84,6 +84,9 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.ok(events.has("MESSAGE_SWIPED"));
   assert.equal(typeof frontendHandler, "function");
   assert.equal(backendTest.normalizeConfig({}).maxTokens, 2_000);
+  assert.equal(backendTest.normalizeConfig({}).outputMode, "auto");
+  assert.equal(backendTest.normalizeConfig({ outputMode: "anthropic" }).outputMode, "anthropic");
+  assert.equal(backendTest.normalizeConfig({ outputMode: "unsupported" }).outputMode, "auto");
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 300_000);
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 900_000 }).timeoutMs, 300_000);
 
@@ -92,6 +95,7 @@ test("background reconciliation saves state and the interceptor injects one bran
     { role: "user", content: "Surprise me" },
   ];
   assert.equal(await interceptor(setupPrompt, { chatId: "chat-1" }), setupPrompt);
+  messages.push(opening);
 
   await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
   assert.ok(frontendMessages.some((payload) => payload.chatId === "chat-1"));
@@ -101,8 +105,24 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.ok(frontendMessages.some(
     (payload) => payload.type === "continuity_connections" && payload.connections[0]?.id === "openai",
   ));
+  await frontendHandler({
+    type: "continuity_save_config",
+    chatId: "chat-1",
+    config: {
+      enabled: true,
+      connectionId: "",
+      outputMode: "plain",
+      maxTokens: 2_000,
+      timeoutMs: 300_000,
+    },
+  }, "user-1");
+  assert.equal(files.get("config.json").timeoutMs, 300_000);
+  assert.equal(files.get("config.json").outputMode, "plain");
+  assert.ok(frontendMessages.some(
+    (payload) => payload.type === "continuity_config_saved" && payload.config.timeoutMs === 300_000,
+  ));
 
-  await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: messages[1] }, "user-1");
+  await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: opening }, "user-1");
 
   assert.equal(variables.get("chat-1:date_simulator.phase"), "active");
   assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "1");
@@ -127,7 +147,7 @@ test("background reconciliation saves state and the interceptor injects one bran
 
   const assembled = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
-    messages[1],
+    opening,
     { id: "u1", role: "user", content: "Hello." },
   ];
   const result = await interceptor(assembled, { chatId: "chat-1" });
@@ -136,6 +156,91 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal((output.match(/<date_simulator_continuity_engine/g) ?? []).length, 1);
   assert.doesNotMatch(output, /<!--DATE_SIM_CASE/);
   assert.match(output, /DS-V14-BACKEND/);
+
+  delete globalThis.spindle;
+});
+
+test("saves the private profile before tracker completion and blocks the next prompt on its checkpoint", async () => {
+  const events = new Map();
+  const files = new Map();
+  const variables = new Map();
+  const messages = [
+    { id: "u0", role: "user", content: "Surprise me" },
+    {
+      id: "a0",
+      role: "assistant",
+      swipe_id: 0,
+      content: `She looks up.\n<!--DATE_SIM_CASE\n${CASE}\nEND_DATE_SIM_CASE-->`,
+    },
+  ];
+  let interceptor;
+  let releaseGeneration;
+  let markGenerationStarted;
+  const generationGate = new Promise((resolve) => { releaseGeneration = resolve; });
+  const generationStarted = new Promise((resolve) => { markGenerationStarted = resolve; });
+
+  globalThis.spindle = {
+    permissions: {
+      has: (permission) => ["generation", "interceptor", "chat_mutation"].includes(permission),
+      onChanged: () => () => undefined,
+    },
+    storage: {
+      getJson: async (name, options) => structuredClone(files.get(name) ?? options?.fallback),
+      setJson: async (name, value) => files.set(name, structuredClone(value)),
+    },
+    variables: {
+      chat: {
+        get: async (chatId, key) => variables.get(`${chatId}:${key}`) ?? "",
+        set: async (chatId, key, value) => variables.set(`${chatId}:${key}`, value),
+      },
+    },
+    chat: { getMessages: async () => structuredClone(messages) },
+    connections: {
+      list: async () => [{ id: "local", provider: "openai", is_default: true }],
+      get: async () => ({ id: "local", provider: "openai", is_default: true }),
+    },
+    generate: {
+      quiet: async () => {
+        markGenerationStarted();
+        await generationGate;
+        return { content: JSON.stringify(cloneEmptyState()), finish_reason: "stop" };
+      },
+    },
+    registerInterceptor: (handler) => { interceptor = handler; },
+    on: (name, handler) => { events.set(name, handler); return () => events.delete(name); },
+    onFrontendMessage: () => () => undefined,
+    sendToFrontend: () => undefined,
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+  };
+
+  await import(`../src/backend.js?barrier-test=${Date.now()}`);
+  const tracking = events.get("MESSAGE_SENT")({ chatId: "chat-barrier", message: messages[1] }, "user-1");
+  await generationStarted;
+
+  assert.match(files.get("chats/chat-barrier.json").caseText, /DS-V14-BACKEND/);
+  assert.equal(variables.get("chat-barrier:date_simulator.phase"), "active");
+  assert.match(variables.get("chat-barrier:date_simulator.case"), /DS-V14-BACKEND/);
+  assert.equal(files.get("chats/chat-barrier.json").revision, 0);
+
+  const nextPrompt = [
+    { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
+    messages[1],
+    { id: "u1", role: "user", content: "Hello." },
+  ];
+  let promptFinished = false;
+  const intercepted = interceptor(nextPrompt, { chatId: "chat-barrier" }).then((value) => {
+    promptFinished = true;
+    return value;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(promptFinished, false);
+
+  releaseGeneration();
+  await tracking;
+  const result = await intercepted;
+  assert.equal(promptFinished, true);
+  assert.equal(files.get("chats/chat-barrier.json").revision, 1);
+  assert.match(result.messages.map((message) => String(message.content)).join("\n"), /CURRENT SCENE/);
 
   delete globalThis.spindle;
 });

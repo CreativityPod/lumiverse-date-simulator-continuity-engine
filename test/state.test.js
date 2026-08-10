@@ -9,6 +9,7 @@ import {
   listEligibleTurns,
   prefixFingerprint,
   stripManagedText,
+  validateCaseCapsuleDetailed,
 } from "../src/state.js";
 import { cloneEmptyState } from "../src/schemas.js";
 
@@ -46,6 +47,19 @@ test("derives a v1.4 case, legacy migration signal, and reset epoch", () => {
   ]);
   assert.equal(reset.active, false);
   assert.equal(reset.epoch, 1);
+});
+
+test("reports the exact malformed private-profile field", () => {
+  const malformed = CASE.replace("BOUNDARIES: No assumed touch.", "BOUNDARIES:");
+  const validation = validateCaseCapsuleDetailed(malformed);
+  assert.equal(validation.value, null);
+  assert.match(validation.error, /BOUNDARIES is empty/);
+  const context = deriveTranscriptContext([
+    { id: "a-invalid", role: "assistant", content: `Opening.\n<!--DATE_SIM_CASE\n${malformed}\nEND_DATE_SIM_CASE-->` },
+  ]);
+  assert.equal(context.active, false);
+  assert.equal(context.invalidCaseMessageId, "a-invalid");
+  assert.match(context.caseError, /BOUNDARIES is empty/);
 });
 
 test("lists immersive turns but excludes look, debrief, and reset responses", () => {
