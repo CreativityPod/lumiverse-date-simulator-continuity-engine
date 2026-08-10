@@ -1,0 +1,11 @@
+{
+  "name": "date-simulator-continuity-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test",
+    "check": "npm run build && npm test && node scripts/validate-package.mjs"
+  }
+}

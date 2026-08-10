@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "name": "Date Simulator Continuity Engine",
+  "identifier": "date_simulator_continuity_engine",
+  "author": "CreativityPod",
+  "github": "https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine",
+  "homepage": "https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine",
+  "description": "Tracks Date Simulator v1.4 scene and relationship-arc continuity with a background LLM, branch-safe checkpoints, and compact prompt injection.",
+  "permissions": [
+    "generation",
+    "interceptor",
+    "chat_mutation"
+  ],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "0.1.0"
+}
