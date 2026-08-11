@@ -1,50 +1,177 @@
-function createLabeledControl(labelText, control) {
-  const label = document.createElement("label");
-  label.className = "dsc-field";
-  const span = document.createElement("span");
-  span.textContent = labelText;
-  label.append(span, control);
-  return label;
+const PROFILE_CARD_SELECTOR = ".ds-state-card[data-ds-profile-card='true']";
+const PROFILE_BUTTON_SELECTOR = ".ds-state-button[data-regex-action='date-sim-save-case']";
+const OUTPUT_MODE_OPTIONS = [
+  { value: "auto", label: "Auto detect from connection" },
+  { value: "openai", label: "OpenAI-compatible JSON Schema" },
+  { value: "anthropic", label: "Anthropic forced tool" },
+  { value: "plain", label: "Plain JSON" },
+];
+
+export function profileCardPresentation(status) {
+  const profileSaved = status?.profileSaved === true;
+  const code = typeof status?.code === "string" ? status.code : "unknown";
+  const text = typeof status?.text === "string" && status.text
+    ? status.text
+    : "Continuity Engine detected. Synchronizing private profile…";
+
+  if (profileSaved) {
+    return {
+      state: "saved",
+      label: "Private profile saved",
+      text,
+      level: status?.level === "amber" ? "amber" : "green",
+      manual: false,
+    };
+  }
+
+  if (code === "invalid_profile") {
+    return {
+      state: "invalid",
+      label: "Private profile needs regeneration",
+      text,
+      level: "amber",
+      manual: false,
+    };
+  }
+
+  if (["disabled", "permissions", "error"].includes(code)) {
+    return {
+      state: "fallback",
+      label: "Private profile ready",
+      text,
+      level: "amber",
+      manual: true,
+    };
+  }
+
+  return {
+    state: "saving",
+    label: "Saving private profile…",
+    text,
+    level: status?.level === "amber" ? "amber" : "green",
+    manual: false,
+  };
 }
 
-function createButton(text, action) {
+function createButton(text, action, primary = false) {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "dsc-button";
+  button.className = `dsc-button${primary ? " dsc-button-primary" : ""}`;
   button.textContent = text;
   button.addEventListener("click", action);
   return button;
 }
 
+function createField(labelText, hintText = "") {
+  const field = document.createElement("div");
+  field.className = "dsc-field";
+  const label = document.createElement("div");
+  label.className = "dsc-label";
+  label.textContent = labelText;
+  const slot = document.createElement("div");
+  slot.className = "dsc-control-slot";
+  field.append(label, slot);
+  let hint = null;
+  if (hintText) {
+    hint = document.createElement("div");
+    hint.className = "dsc-hint";
+    hint.textContent = hintText;
+    field.appendChild(hint);
+  }
+  return { field, slot, hint };
+}
+
+function createFallbackDetails(title, expanded = false) {
+  const details = document.createElement("details");
+  details.className = "dsc-details";
+  details.open = expanded;
+  const summary = document.createElement("summary");
+  summary.textContent = title;
+  const body = document.createElement("div");
+  body.className = "dsc-details-body";
+  details.append(summary, body);
+  return { element: details, body };
+}
+
+function supportsNativeComponents(ctx) {
+  const names = [
+    "mountBadge",
+    "mountCheckbox",
+    "mountCollapsibleSection",
+    "mountNumericInput",
+    "mountSelect",
+    "mountSwitch",
+  ];
+  return names.every((name) => typeof ctx.components?.[name] === "function");
+}
+
+function cardsInside(root) {
+  if (!(root instanceof Element)) return [];
+  const cards = [];
+  if (root.matches(PROFILE_CARD_SELECTOR) || root.querySelector(PROFILE_BUTTON_SELECTOR)) {
+    const card = root.matches(".ds-state-card") ? root : root.closest(".ds-state-card");
+    if (card) cards.push(card);
+  }
+  cards.push(...root.querySelectorAll(PROFILE_CARD_SELECTOR));
+  for (const button of root.querySelectorAll(PROFILE_BUTTON_SELECTOR)) {
+    const card = button.closest(".ds-state-card");
+    if (card) cards.push(card);
+  }
+  return [...new Set(cards)];
+}
+
 export function setup(ctx) {
   ctx.deferReady();
   const cleanups = [];
+  const mountedComponents = [];
   let latestStatus = null;
   let latestConnections = [];
   let activeChatId = null;
   let connectionDiagnostic = "Loading connection profiles…";
   let connectionPermissionGranted = null;
+  let cardSyncQueued = false;
+  const cardWatchdogs = new WeakMap();
+  const watchdogTimers = new Set();
 
   const removeStyle = ctx.dom.addStyle(`
-    .dsc-panel { padding: 14px; color: var(--lumiverse-text); display: grid; gap: 12px; }
-    .dsc-card { border: 1px solid var(--lumiverse-border, #475569); border-radius: var(--lumiverse-radius, 10px); padding: 12px; background: var(--lumiverse-fill-subtle, rgba(15,23,42,.45)); }
-    .dsc-status { font-weight: 700; }
-    .dsc-status[data-level="green"] { color: #22c55e; }
-    .dsc-status[data-level="amber"] { color: #f59e0b; }
-    .dsc-field { display: grid; gap: 5px; font-size: .86rem; }
-    .dsc-field select, .dsc-field input { color: var(--lumiverse-text, #e2e8f0) !important; background-color: var(--lumiverse-fill, #1e293b) !important; border: 1px solid var(--lumiverse-border, #64748b) !important; border-radius: 8px; padding: 8px; min-height: 38px; }
-    .dsc-field select { appearance: auto !important; -webkit-appearance: menulist !important; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(148,163,184,.08); }
-    .dsc-field select:focus, .dsc-field input:focus { outline: 2px solid var(--lumiverse-accent, #38bdf8); outline-offset: 1px; }
+    .dsc-panel { color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 16px; }
+    .dsc-status-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 2px 0 12px; border-bottom: 1px solid var(--lumiverse-border); }
+    .dsc-status-copy { min-width: 0; display: grid; gap: 4px; }
+    .dsc-status { color: var(--lumiverse-text); font-size: .86rem; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+    .dsc-status-meta { color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); font-size: .72rem; overflow-wrap: anywhere; }
+    .dsc-status-badge { flex: 0 0 auto; }
+    .dsc-section { display: grid; gap: 12px; }
+    .dsc-section-title { color: var(--lumiverse-text); font-size: .82rem; font-weight: 600; }
+    .dsc-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+    .dsc-toggle-copy { display: grid; gap: 2px; min-width: 0; }
+    .dsc-toggle-slot { flex: 0 0 auto; }
+    .dsc-field { display: grid; gap: 6px; }
+    .dsc-label { color: var(--lumiverse-text-muted); font-size: .78rem; font-weight: 500; }
+    .dsc-hint { color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); font-size: .7rem; line-height: 1.4; overflow-wrap: anywhere; }
+    .dsc-hint[data-level="amber"] { color: var(--lumiverse-warning, var(--lumiverse-text-muted)); }
+    .dsc-control-slot { min-width: 0; }
+    .dsc-actions-section { display: grid; gap: 8px; padding-top: 2px; }
     .dsc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    .dsc-button { appearance: button !important; color: var(--lumiverse-accent-fg, #ffffff) !important; background: var(--lumiverse-accent, #2563eb) !important; border: 1px solid var(--lumiverse-accent, #60a5fa) !important; border-radius: 8px; padding: 8px 11px; min-height: 36px; font-weight: 700; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.28); }
-    .dsc-button:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); }
-    .dsc-button:active:not(:disabled) { filter: brightness(.92); transform: translateY(0); }
-    .dsc-button:disabled { opacity: .55; cursor: wait; }
-    .dsc-hint { color: var(--lumiverse-text-muted); font-size: .76rem; overflow-wrap: anywhere; }
-    .dsc-hint[data-level="amber"] { color: #f59e0b; }
-    .dsc-state { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow: auto; font-size: .78rem; color: var(--lumiverse-text-muted); }
-    .ds-tracker-status[data-engine-level="green"] { color: #bbf7d0 !important; border-color: rgba(34,197,94,.45) !important; background: rgba(21,128,61,.18) !important; }
-    .ds-tracker-status[data-engine-level="amber"] { color: #fde68a !important; border-color: rgba(245,158,11,.45) !important; background: rgba(146,64,14,.18) !important; }
+    .dsc-button { appearance: none; display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 8px 14px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted); font: inherit; font-size: .78rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
+    .dsc-button:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
+    .dsc-button:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 2px; }
+    .dsc-button-primary { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); }
+    .dsc-button-primary:hover:not(:disabled) { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); filter: brightness(1.06); }
+    .dsc-button:disabled { opacity: .5; cursor: wait; }
+    .dsc-fallback-control { box-sizing: border-box; width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); font: inherit; font-size: .78rem; }
+    .dsc-fallback-control:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 1px; }
+    .dsc-fallback-check { display: flex; align-items: flex-start; gap: 8px; color: var(--lumiverse-text-muted); font-size: .78rem; }
+    .dsc-details { border-top: 1px solid var(--lumiverse-border); padding-top: 10px; }
+    .dsc-details > summary { color: var(--lumiverse-text); font-size: .82rem; font-weight: 600; cursor: pointer; }
+    .dsc-details-body { display: grid; gap: 12px; padding-top: 12px; }
+    .dsc-native-section-body { display: grid; gap: 12px; padding-top: 10px; }
+    .dsc-state { box-sizing: border-box; width: 100%; margin: 10px 0 0; padding: 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: var(--lumiverse-fill-subtle); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow: auto; font-size: .72rem; color: var(--lumiverse-text-muted); }
+    .ds-state-card .ds-engine-checking, .ds-state-card .ds-engine-missing { display: none !important; }
+    .ds-state-card .ds-engine-live { display: inline !important; }
+    .ds-state-card ${PROFILE_BUTTON_SELECTOR} { display: none !important; animation: none !important; }
+    .ds-state-card[data-engine-manual="true"] ${PROFILE_BUTTON_SELECTOR} { display: inline-flex !important; visibility: visible !important; opacity: 1 !important; pointer-events: auto !important; }
+    .ds-tracker-status[data-engine-level="green"] { color: var(--lumiverse-success, #86aF92) !important; }
+    .ds-tracker-status[data-engine-level="amber"] { color: var(--lumiverse-warning, #c89b62) !important; }
   `);
   cleanups.push(removeStyle);
 
@@ -61,121 +188,306 @@ export function setup(ctx) {
 
   const panel = document.createElement("div");
   panel.className = "dsc-panel";
-  const statusCard = document.createElement("section");
-  statusCard.className = "dsc-card";
+
+  const statusRow = document.createElement("section");
+  statusRow.className = "dsc-status-row";
+  const statusCopy = document.createElement("div");
+  statusCopy.className = "dsc-status-copy";
   const statusText = document.createElement("div");
   statusText.className = "dsc-status";
   const statusMeta = document.createElement("div");
-  statusMeta.style.fontSize = ".78rem";
-  statusMeta.style.marginTop = "6px";
-  statusMeta.style.color = "var(--lumiverse-text-muted)";
-  statusCard.append(statusText, statusMeta);
+  statusMeta.className = "dsc-status-meta";
+  statusCopy.append(statusText, statusMeta);
+  const statusBadgeSlot = document.createElement("div");
+  statusBadgeSlot.className = "dsc-status-badge";
+  statusRow.append(statusCopy, statusBadgeSlot);
 
-  const configCard = document.createElement("section");
-  configCard.className = "dsc-card";
-  const enabled = document.createElement("input");
-  enabled.type = "checkbox";
-  const connection = document.createElement("select");
-  const connectionStatus = document.createElement("div");
-  connectionStatus.className = "dsc-hint";
-  const outputMode = document.createElement("select");
-  for (const [value, label] of [
-    ["auto", "Auto detect from connection"],
-    ["openai", "OpenAI-compatible JSON Schema"],
-    ["anthropic", "Anthropic forced tool"],
-    ["plain", "Plain JSON"],
-  ]) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    outputMode.appendChild(option);
-  }
-  const maxTokens = document.createElement("input");
-  maxTokens.type = "number";
-  maxTokens.min = "400";
-  maxTokens.max = "2000";
-  const timeout = document.createElement("input");
-  timeout.type = "number";
-  timeout.min = "5";
-  timeout.max = "300";
-  configCard.append(
-    createLabeledControl("Tracking enabled", enabled),
-    createLabeledControl("Tracker connection", connection),
-    connectionStatus,
-    createLabeledControl("Structured output mode", outputMode),
-    createLabeledControl("Maximum tracker output tokens", maxTokens),
-    createLabeledControl("Tracker timeout in seconds", timeout),
-  );
-  configCard.style.display = "grid";
-  configCard.style.gap = "10px";
+  const settingsSection = document.createElement("section");
+  settingsSection.className = "dsc-section";
+  const settingsTitle = document.createElement("div");
+  settingsTitle.className = "dsc-section-title";
+  settingsTitle.textContent = "Tracker settings";
+  settingsSection.appendChild(settingsTitle);
 
-  const stateCard = document.createElement("section");
-  stateCard.className = "dsc-card";
-  const showPrivateLabel = document.createElement("label");
-  const showPrivate = document.createElement("input");
-  showPrivate.type = "checkbox";
-  showPrivateLabel.append(showPrivate, document.createTextNode(" Show private tracker state"));
-  const stateText = document.createElement("pre");
-  stateText.className = "dsc-state";
-  stateText.textContent = "Private state is hidden.";
-  stateCard.append(showPrivateLabel, stateText);
+  const advancedHost = document.createElement("div");
+  const privateHost = document.createElement("div");
 
+  const actionsSection = document.createElement("section");
+  actionsSection.className = "dsc-actions-section";
   const actions = document.createElement("div");
   actions.className = "dsc-actions";
   const actionStatus = document.createElement("div");
   actionStatus.className = "dsc-hint";
   actionStatus.textContent = "Reprocess and migration progress will appear here.";
-  const reprocessButton = createButton("Reprocess Latest Turn", () => {
-    if (!activeChatId) {
-      setActionFeedback("Open a Date Simulator chat before reprocessing.", "amber");
-      requestStatus();
-      return;
-    }
-    setActionPending("Reprocessing the latest eligible immersive turn…");
-    ctx.sendToBackend({
-      type: "continuity_reprocess",
-      chatId: activeChatId,
-      includePrivate: showPrivate.checked,
-    });
-  });
-  const migrateButton = createButton("Migrate Current Chat", () => {
-    if (!activeChatId) {
-      setActionFeedback("Open a Date Simulator chat before migrating.", "amber");
-      requestStatus();
-      return;
-    }
-    setActionPending("Migrating the current chat…");
-    ctx.sendToBackend({
-      type: "continuity_migrate",
-      chatId: activeChatId,
-      includePrivate: showPrivate.checked,
-    });
-  });
-  actions.append(
-    createButton("Save Settings", () => {
-      ctx.sendToBackend({
-        type: "continuity_save_config",
-        chatId: activeChatId,
-        config: {
-          enabled: enabled.checked,
-          connectionId: connection.value,
-          outputMode: outputMode.value,
-          maxTokens: Number(maxTokens.value),
-          timeoutMs: Number(timeout.value) * 1_000,
-        },
-      });
-    }),
-    createButton("Refresh Connections", () => {
-      connectionDiagnostic = "Refreshing connection profiles…";
-      renderConnections();
-      ctx.sendToBackend({ type: "continuity_get_connections" });
-    }),
-    reprocessButton,
-    migrateButton,
-  );
+  actionsSection.append(actions, actionStatus);
 
-  panel.append(statusCard, configCard, actions, actionStatus, stateCard);
+  panel.append(statusRow, settingsSection, advancedHost, actionsSection, privateHost);
   tab.root.appendChild(panel);
+
+  const stateText = document.createElement("pre");
+  stateText.className = "dsc-state";
+  stateText.textContent = "Private state is hidden.";
+
+  let controls;
+  let badgeControl;
+  let nativeComponents = supportsNativeComponents(ctx);
+
+  function buildNativeControls() {
+    const enabledRow = document.createElement("div");
+    enabledRow.className = "dsc-toggle-row";
+    const enabledCopy = document.createElement("div");
+    enabledCopy.className = "dsc-toggle-copy";
+    const enabledLabel = document.createElement("div");
+    enabledLabel.className = "dsc-label";
+    enabledLabel.textContent = "Tracking enabled";
+    const enabledHint = document.createElement("div");
+    enabledHint.className = "dsc-hint";
+    enabledHint.textContent = "Update continuity after completed immersive turns.";
+    enabledCopy.append(enabledLabel, enabledHint);
+    const enabledSlot = document.createElement("div");
+    enabledSlot.className = "dsc-toggle-slot";
+    enabledRow.append(enabledCopy, enabledSlot);
+
+    const connectionField = createField("Tracker connection");
+    const connectionStatus = document.createElement("div");
+    connectionStatus.className = "dsc-hint";
+    connectionField.field.appendChild(connectionStatus);
+    settingsSection.append(enabledRow, connectionField.field);
+
+    const advancedMount = ctx.components.mountCollapsibleSection(advancedHost, {
+      title: "Advanced settings",
+      defaultExpanded: false,
+    });
+    mountedComponents.push(advancedMount);
+    advancedMount.body.classList.add("dsc-native-section-body");
+    const outputField = createField("Structured output mode", "Auto follows the selected connection provider.");
+    const maxTokensField = createField("Maximum tracker output tokens", "Allowed range: 400–2,000 tokens.");
+    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–300 seconds.");
+    advancedMount.body.append(outputField.field, maxTokensField.field, timeoutField.field);
+
+    const privateMount = ctx.components.mountCollapsibleSection(privateHost, {
+      title: "Private tracker state",
+      defaultExpanded: false,
+    });
+    mountedComponents.push(privateMount);
+    privateMount.body.classList.add("dsc-native-section-body");
+    const showPrivateSlot = document.createElement("div");
+    privateMount.body.append(showPrivateSlot, stateText);
+
+    const enabled = ctx.components.mountSwitch(enabledSlot, {
+      checked: true,
+      size: "md",
+      ariaLabel: "Tracking enabled",
+    });
+    mountedComponents.push(enabled);
+    const connection = ctx.components.mountSelect(connectionField.slot, {
+      value: "",
+      options: [],
+      placeholder: "Active default connection",
+      searchPlaceholder: "Search connections…",
+      emptyMessage: "No named connection profiles available",
+      ariaLabel: "Tracker connection",
+    });
+    mountedComponents.push(connection);
+    const outputMode = ctx.components.mountSelect(outputField.slot, {
+      value: "auto",
+      options: OUTPUT_MODE_OPTIONS,
+      ariaLabel: "Structured output mode",
+      searchThreshold: 10,
+    });
+    mountedComponents.push(outputMode);
+    const maxTokens = ctx.components.mountNumericInput(maxTokensField.slot, {
+      value: 2_000,
+      min: 400,
+      max: 2_000,
+      step: 100,
+      integer: true,
+    });
+    mountedComponents.push(maxTokens);
+    const timeout = ctx.components.mountNumericInput(timeoutField.slot, {
+      value: 45,
+      min: 5,
+      max: 300,
+      step: 5,
+      integer: true,
+    });
+    mountedComponents.push(timeout);
+    const showPrivate = ctx.components.mountCheckbox(showPrivateSlot, {
+      checked: false,
+      label: "Show private tracker state",
+      hint: "Displays extension-owned continuity data for this chat.",
+      onChange: requestStatus,
+    });
+    mountedComponents.push(showPrivate);
+
+    badgeControl = ctx.components.mountBadge(statusBadgeSlot, {
+      text: "Checking",
+      color: "neutral",
+      size: "pill",
+    });
+    mountedComponents.push(badgeControl);
+
+    return {
+      native: true,
+      enabled: {
+        get: () => enabled.getValue(),
+        set: (value) => enabled.update({ checked: value }),
+      },
+      connection: {
+        get: () => connection.getValue(),
+        set: (value) => connection.update({ value }),
+        configure: (options, value, disabled) => connection.update({ options, value, disabled }),
+      },
+      outputMode: {
+        get: () => outputMode.getValue(),
+        set: (value) => outputMode.update({ value }),
+      },
+      maxTokens: {
+        get: () => maxTokens.getValue(),
+        set: (value) => maxTokens.update({ value }),
+      },
+      timeout: {
+        get: () => timeout.getValue(),
+        set: (value) => timeout.update({ value }),
+      },
+      showPrivate: {
+        get: () => showPrivate.getValue(),
+      },
+      connectionStatus,
+    };
+  }
+
+  function buildFallbackControls() {
+    const enabledRow = document.createElement("label");
+    enabledRow.className = "dsc-fallback-check";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    const enabledText = document.createElement("span");
+    enabledText.textContent = "Tracking enabled — update continuity after completed immersive turns.";
+    enabledRow.append(enabled, enabledText);
+
+    const connectionField = createField("Tracker connection");
+    const connection = document.createElement("select");
+    connection.className = "dsc-fallback-control";
+    connectionField.slot.appendChild(connection);
+    const connectionStatus = document.createElement("div");
+    connectionStatus.className = "dsc-hint";
+    connectionField.field.appendChild(connectionStatus);
+    settingsSection.append(enabledRow, connectionField.field);
+
+    const advanced = createFallbackDetails("Advanced settings", false);
+    advancedHost.appendChild(advanced.element);
+    const outputField = createField("Structured output mode", "Auto follows the selected connection provider.");
+    const outputMode = document.createElement("select");
+    outputMode.className = "dsc-fallback-control";
+    for (const option of OUTPUT_MODE_OPTIONS) {
+      const element = document.createElement("option");
+      element.value = option.value;
+      element.textContent = option.label;
+      outputMode.appendChild(element);
+    }
+    outputField.slot.appendChild(outputMode);
+    const maxTokensField = createField("Maximum tracker output tokens", "Allowed range: 400–2,000 tokens.");
+    const maxTokens = document.createElement("input");
+    maxTokens.type = "number";
+    maxTokens.min = "400";
+    maxTokens.max = "2000";
+    maxTokens.step = "100";
+    maxTokens.className = "dsc-fallback-control";
+    maxTokensField.slot.appendChild(maxTokens);
+    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–300 seconds.");
+    const timeout = document.createElement("input");
+    timeout.type = "number";
+    timeout.min = "5";
+    timeout.max = "300";
+    timeout.step = "5";
+    timeout.className = "dsc-fallback-control";
+    timeoutField.slot.appendChild(timeout);
+    advanced.body.append(outputField.field, maxTokensField.field, timeoutField.field);
+
+    const privateDetails = createFallbackDetails("Private tracker state", false);
+    privateHost.appendChild(privateDetails.element);
+    const showPrivateLabel = document.createElement("label");
+    showPrivateLabel.className = "dsc-fallback-check";
+    const showPrivate = document.createElement("input");
+    showPrivate.type = "checkbox";
+    showPrivate.addEventListener("change", requestStatus);
+    const showPrivateText = document.createElement("span");
+    showPrivateText.textContent = "Show extension-owned continuity data for this chat.";
+    showPrivateLabel.append(showPrivate, showPrivateText);
+    privateDetails.body.append(showPrivateLabel, stateText);
+
+    const badge = document.createElement("span");
+    badge.className = "dsc-label";
+    badge.textContent = "Checking";
+    statusBadgeSlot.appendChild(badge);
+    badgeControl = {
+      update: ({ text, color }) => {
+        badge.textContent = text;
+        badge.dataset.level = color === "success" ? "green" : color === "warning" ? "amber" : "neutral";
+      },
+    };
+
+    return {
+      native: false,
+      enabled: {
+        get: () => enabled.checked,
+        set: (value) => { enabled.checked = value; },
+      },
+      connection: {
+        get: () => connection.value,
+        set: (value) => { connection.value = value; },
+        configure: (options, value, disabled) => {
+          connection.replaceChildren();
+          for (const option of options) {
+            const element = document.createElement("option");
+            element.value = option.value;
+            element.textContent = option.sublabel
+              ? `${option.label} — ${option.sublabel}`
+              : option.label;
+            connection.appendChild(element);
+          }
+          connection.value = value;
+          connection.disabled = disabled;
+        },
+      },
+      outputMode: {
+        get: () => outputMode.value,
+        set: (value) => { outputMode.value = value; },
+      },
+      maxTokens: {
+        get: () => Number(maxTokens.value),
+        set: (value) => { maxTokens.value = String(value); },
+      },
+      timeout: {
+        get: () => Number(timeout.value),
+        set: (value) => { timeout.value = String(value); },
+      },
+      showPrivate: {
+        get: () => showPrivate.checked,
+      },
+      connectionStatus,
+    };
+  }
+
+  if (nativeComponents) {
+    try {
+      controls = buildNativeControls();
+    } catch (error) {
+      nativeComponents = false;
+      for (const handle of mountedComponents.splice(0).reverse()) {
+        try { handle.destroy(); } catch { /* best-effort cleanup */ }
+      }
+      settingsSection.querySelectorAll(":scope > :not(.dsc-section-title)").forEach((element) => element.remove());
+      advancedHost.replaceChildren();
+      privateHost.replaceChildren();
+      statusBadgeSlot.replaceChildren();
+      controls = buildFallbackControls();
+      connectionDiagnostic = `Using Lumiverse-compatible HTML controls because native components were unavailable: ${String(error?.message ?? error)}`;
+    }
+  } else {
+    controls = buildFallbackControls();
+  }
 
   function setActionFeedback(message, level = "green") {
     actionStatus.dataset.level = level;
@@ -198,96 +510,234 @@ export function setup(ctx) {
     ctx.sendToBackend({
       type: "continuity_get_status",
       chatId: activeChatId,
-      includePrivate: showPrivate.checked,
+      includePrivate: controls?.showPrivate.get() === true,
     });
   }
 
-  function renderConnections() {
-    const selected = latestStatus?.config?.connectionId ?? connection.value;
-    connection.replaceChildren();
-    const automatic = document.createElement("option");
-    automatic.value = "";
-    automatic.textContent = "Active default connection";
-    connection.appendChild(automatic);
+  function connectionOptions(selected) {
+    const options = [{ value: "", label: "Active default connection" }];
     for (const item of latestConnections.filter((entry) => entry?.id)) {
-      const option = document.createElement("option");
-      option.value = item.id;
-      const details = [item.provider, item.model].filter(Boolean).join("/");
-      option.textContent = `${item.name || item.id}${details ? ` — ${details}` : ""}`;
-      connection.appendChild(option);
+      const details = [item.provider, item.model].filter(Boolean).join(" / ");
+      options.push({
+        value: item.id,
+        label: item.name || item.id,
+        sublabel: details || undefined,
+      });
     }
     if (selected && !latestConnections.some((item) => item?.id === selected)) {
-      const unavailable = document.createElement("option");
-      unavailable.value = selected;
-      unavailable.textContent = `${selected} — saved profile unavailable`;
-      connection.appendChild(unavailable);
+      options.push({
+        value: selected,
+        label: selected,
+        sublabel: "Saved profile unavailable",
+      });
     }
-    connection.value = selected;
-    connection.disabled = connectionPermissionGranted === false;
-    connectionStatus.dataset.level = connectionPermissionGranted === false || connectionDiagnostic
+    return options;
+  }
+
+  function renderConnections() {
+    const selected = latestStatus?.config?.connectionId ?? controls.connection.get() ?? "";
+    controls.connection.configure(
+      connectionOptions(selected),
+      selected,
+      connectionPermissionGranted === false,
+    );
+    controls.connectionStatus.dataset.level = connectionPermissionGranted === false || connectionDiagnostic
       ? "amber"
       : "green";
-    connectionStatus.textContent = connectionDiagnostic || (
+    controls.connectionStatus.textContent = connectionDiagnostic || (
       latestConnections.length > 0
         ? `${latestConnections.length} connection profile${latestConnections.length === 1 ? "" : "s"} available.`
         : "No named connection profiles were returned; the active default connection remains available."
     );
   }
 
-  function updateProfileCard(status) {
-    if (!status?.caseMessageId) return;
+  function profileCardsForStatus(status) {
+    if (!status?.caseMessageId) return [];
     const bubble = ctx.dom.findMessageElement(status.caseMessageId);
-    if (!bubble) return;
-    const badge = bubble.querySelector(".ds-tracker-status");
-    const label = bubble.querySelector(".ds-state-label");
-    if (badge) {
-      badge.dataset.engineLevel = status.level;
-      badge.textContent = status.text;
+    const exact = cardsInside(bubble);
+    if (exact.length > 0) return exact;
+
+    const fallback = [];
+    for (const card of document.querySelectorAll(".ds-state-card")) {
+      if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
+        fallback.push(card);
+      }
     }
-    const button = bubble.querySelector(".ds-state-button");
-    if (button) {
-      if (status.profileSaved) {
-        button.hidden = true;
-        button.disabled = true;
-        button.dataset.lumiverseRegexActionUsed = "true";
-        if (label) label.textContent = "Private profile saved";
-      } else {
+    return fallback.length > 0 ? [fallback.at(-1)] : [];
+  }
+
+  function clearCardWatchdog(card) {
+    const timer = cardWatchdogs.get(card);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    watchdogTimers.delete(timer);
+    cardWatchdogs.delete(card);
+  }
+
+  function armCardWatchdog(card) {
+    if (!(card instanceof Element) || cardWatchdogs.has(card)) return;
+    if (!card.dataset.engineState) card.dataset.engineState = "checking";
+    const timer = setTimeout(() => {
+      watchdogTimers.delete(timer);
+      cardWatchdogs.delete(card);
+      if (!card.isConnected || card.dataset.engineState !== "checking") return;
+      card.dataset.engineState = "frontend-only";
+      card.dataset.engineManual = "true";
+      const badge = card.querySelector(".ds-tracker-status");
+      if (badge) {
+        badge.dataset.engineLevel = "amber";
+        const text = "Continuity Engine frontend detected, but the backend did not confirm this profile. Save Manually and check extension permissions.";
+        const live = badge.querySelector(".ds-engine-live");
+        if (live) live.textContent = text;
+        else badge.textContent = text;
+      }
+      const button = card.querySelector(PROFILE_BUTTON_SELECTOR);
+      if (button) {
         button.hidden = false;
         button.disabled = false;
         button.textContent = "Save Manually";
-        if (label) {
-          label.textContent = status.code === "profile_saving"
-            ? "Saving private profile…"
-            : "Private profile ready";
+        delete button.dataset.lumiverseRegexActionUsed;
+      }
+    }, 4_000);
+    cardWatchdogs.set(card, timer);
+    watchdogTimers.add(timer);
+  }
+
+  function updateProfileCards(status) {
+    if (!status?.caseMessageId) return;
+    const presentation = profileCardPresentation(status);
+    for (const card of profileCardsForStatus(status)) {
+      clearCardWatchdog(card);
+      card.dataset.engineState = presentation.state;
+      card.dataset.engineManual = presentation.manual ? "true" : "false";
+      const badge = card.querySelector(".ds-tracker-status");
+      if (badge) {
+        badge.dataset.engineLevel = presentation.level;
+        const live = badge.querySelector(".ds-engine-live");
+        if (live) live.textContent = presentation.text;
+        else badge.textContent = presentation.text;
+      }
+      const label = card.querySelector(".ds-state-label");
+      if (label) label.textContent = presentation.label;
+      const button = card.querySelector(PROFILE_BUTTON_SELECTOR);
+      if (button) {
+        button.textContent = "Save Manually";
+        button.hidden = !presentation.manual;
+        button.disabled = !presentation.manual;
+        if (presentation.state === "saved") {
+          button.dataset.lumiverseRegexActionUsed = "true";
+        } else {
+          delete button.dataset.lumiverseRegexActionUsed;
         }
       }
     }
   }
 
+  function scheduleProfileCardSync() {
+    if (cardSyncQueued) return;
+    cardSyncQueued = true;
+    queueMicrotask(() => {
+      cardSyncQueued = false;
+      if (latestStatus) updateProfileCards(latestStatus);
+    });
+  }
+
   function renderStatus(status) {
     latestStatus = status;
     if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
-    statusText.dataset.level = status.level;
     statusText.textContent = status.text;
     statusMeta.textContent = status.chatId
-      ? `Revision ${status.revision || 0}${status.updatedAt ? ` · ${status.updatedAt}` : ""}`
+      ? `Revision ${status.revision || 0}${status.updatedAt ? ` · ${status.updatedAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
       : "No active chat.";
-    enabled.checked = status.config?.enabled !== false;
-    outputMode.value = status.config?.outputMode ?? "auto";
-    maxTokens.value = String(status.config?.maxTokens ?? 2_000);
-    timeout.value = String(Math.round((status.config?.timeoutMs ?? 45_000) / 1_000));
+    const badgeText = status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
+    const badgeColor = status.processing ? "info" : status.level === "green" ? "success" : "warning";
+    badgeControl.update({ text: badgeText, color: badgeColor });
+    controls.enabled.set(status.config?.enabled !== false);
+    controls.outputMode.set(status.config?.outputMode ?? "auto");
+    controls.maxTokens.set(status.config?.maxTokens ?? 2_000);
+    controls.timeout.set(Math.round((status.config?.timeoutMs ?? 45_000) / 1_000));
     renderConnections();
-    stateText.textContent = showPrivate.checked && status.state
+    stateText.textContent = controls.showPrivate.get() === true && status.state
       ? JSON.stringify(status.state, null, 2)
       : "Private state is hidden.";
     tab.setBadge(status.level === "green" ? null : "!");
-    updateProfileCard(status);
+    updateProfileCards(status);
   }
 
-  showPrivate.addEventListener("change", requestStatus);
+  const saveButton = createButton("Save Settings", () => {
+    ctx.sendToBackend({
+      type: "continuity_save_config",
+      chatId: activeChatId,
+      config: {
+        enabled: controls.enabled.get() === true,
+        connectionId: controls.connection.get() ?? "",
+        outputMode: controls.outputMode.get() ?? "auto",
+        maxTokens: Number(controls.maxTokens.get()),
+        timeoutMs: Number(controls.timeout.get()) * 1_000,
+      },
+    });
+  }, true);
+  const refreshButton = createButton("Refresh Connections", () => {
+    connectionDiagnostic = "Refreshing connection profiles…";
+    renderConnections();
+    ctx.sendToBackend({ type: "continuity_get_connections" });
+  });
+  const reprocessButton = createButton("Reprocess Latest Turn", () => {
+    if (!activeChatId) {
+      setActionFeedback("Open a Date Simulator chat before reprocessing.", "amber");
+      requestStatus();
+      return;
+    }
+    setActionPending("Reprocessing the latest eligible immersive turn…");
+    ctx.sendToBackend({
+      type: "continuity_reprocess",
+      chatId: activeChatId,
+      includePrivate: controls.showPrivate.get() === true,
+    });
+  });
+  const migrateButton = createButton("Migrate Current Chat", () => {
+    if (!activeChatId) {
+      setActionFeedback("Open a Date Simulator chat before migrating.", "amber");
+      requestStatus();
+      return;
+    }
+    setActionPending("Migrating the current chat…");
+    ctx.sendToBackend({
+      type: "continuity_migrate",
+      chatId: activeChatId,
+      includePrivate: controls.showPrivate.get() === true,
+    });
+  });
+  actions.append(saveButton, refreshButton, reprocessButton, migrateButton);
+
+  if (typeof MutationObserver === "function" && document.body) {
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const cards = [...record.addedNodes].flatMap(cardsInside);
+        if (cards.length > 0) {
+          for (const card of cards) armCardWatchdog(card);
+          scheduleProfileCardSync();
+          break;
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    cleanups.push(() => observer.disconnect());
+  }
+  for (const card of document.querySelectorAll(".ds-state-card")) {
+    if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
+      armCardWatchdog(card);
+    }
+  }
+  cleanups.push(() => {
+    for (const timer of watchdogTimers) clearTimeout(timer);
+    watchdogTimers.clear();
+  });
+
   cleanups.push(tab.onActivate(() => {
     requestStatus();
     ctx.sendToBackend({ type: "continuity_get_connections" });
+    scheduleProfileCardSync();
   }));
 
   cleanups.push(ctx.onBackendMessage((payload) => {
@@ -316,12 +766,14 @@ export function setup(ctx) {
 
   cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
+    latestStatus = null;
     requestStatus();
   }));
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
       if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
       requestStatus();
+      scheduleProfileCardSync();
     }));
   }
 
@@ -330,6 +782,9 @@ export function setup(ctx) {
   ctx.sendToBackend({ type: "continuity_get_connections" });
 
   return () => {
+    for (const handle of mountedComponents.reverse()) {
+      try { handle.destroy(); } catch { /* best-effort cleanup */ }
+    }
     for (const cleanup of cleanups.reverse()) {
       try { cleanup(); } catch { /* best-effort cleanup */ }
     }

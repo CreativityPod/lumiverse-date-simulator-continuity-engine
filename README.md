@@ -24,12 +24,12 @@ Arc: relevant recurring NPCs, current relationship, active boundary or concern, 
 
 ## Status behavior
 
-The profile card is amber by default because a regex script cannot itself prove that an extension is running. Once the backend and frontend are ready, the extension validates and saves the stable profile locally before starting tracker generation, then updates that card:
+The companion profile card starts in a neutral checking state. While the extension frontend is loaded, a persistent presence handshake immediately replaces that fallback with live engine status, including when Lumiverse renders or replaces the card after the original message event. The backend validates and saves the stable profile locally before starting tracker generation; it never simulates a click on the Regex Script action.
 
 - Green: private profile saved; automatic scene and arc tracking is ready.
 - Amber: disabled, missing permission, processing, migration required, or using the last valid state after an error.
 
-The manual profile action is only a no-extension or missing-permission fallback. With a functioning engine, no per-case click is required.
+The manual profile action is only a fallback when the extension is absent or automatic profile persistence cannot be confirmed because of configuration, permissions, or an unsaved error. It remains hidden after a valid automatic save even if tracking is disabled or a later tracker update is degraded. With a functioning engine, no per-case click is required.
 
 ## Turn and recovery behavior
 
@@ -41,12 +41,12 @@ Structured-output modes are **Auto**, **OpenAI-compatible JSON Schema**, **Anthr
 
 For LM Studio, the extension's **OpenAI-compatible JSON Schema** mode supplies `response_format` on the API request and does not require the Structured Output control in LM Studio's chat UI to be enabled. The provider-facing schema is intentionally structural and regex-free for llama.cpp grammar compatibility; exact text limits and markup rejection remain enforced locally before state is committed.
 
-The Continuity drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, and explicit v1.3.1 migration.
+The Continuity drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, and explicit v1.3.1 migration. It uses Lumiverse's host-mounted form controls when available, so selects, switches, numeric inputs, badges, and collapsible sections inherit the active theme. Older hosts receive one consistent theme-token HTML fallback.
 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a rendered private-profile card still says the engine is not detected, switch back to the chat or render/send one message after updating the extension. Version 1.0.1 also recovers the current chat ID from rendered and sent-message events, so the warning is replaced as soon as the startup handshake completes.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm both Continuity Engine v1.0.10 and the current v1.4 persistent-state companion are installed. The extension self-heals cards rendered after status publication; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 300 seconds. Version 1.0.2 fixes the earlier 120-second validation ceiling.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -56,6 +56,7 @@ The Continuity drawer also permits private-state inspection, reprocessing the la
 - Version 1.0.7 adds visible started, completed, no-chat, and tracker-error feedback for Reprocess Latest Turn and migration actions.
 - Version 1.0.8 saves stable profiles before tracker generation, adds a strict next-turn checkpoint barrier, supports explicit output modes, aligns provider constraints with runtime validation, reports exact field diagnostics, and conservatively recovers valid state sections without spending a repair call on a malformed optional objective.
 - Version 1.0.9 removes PCRE shorthand patterns that llama.cpp could not compile into a grammar, adds the complete expected JSON shape to the normal tracker prompt, improves Auto detection for custom OpenAI-compatible connections, and gives drawer dropdowns and buttons explicit Lumiverse 1.1-compatible affordances.
+- Version 1.0.10 replaces the timing-sensitive profile-card update with a persistent presence handshake and delayed-render observer, keeps manual saving strictly as a fallback, and rebuilds the Continuity drawer with Lumiverse host-mounted components plus a complete theme-token compatibility mode.
 
 ## Development
 
