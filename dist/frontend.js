@@ -98,7 +98,6 @@ function supportsNativeComponents(ctx) {
   const names = [
     "mountBadge",
     "mountCheckbox",
-    "mountCollapsibleSection",
     "mountNumericInput",
     "mountSelect",
     "mountSwitch",
@@ -163,14 +162,27 @@ export function setup(ctx) {
     .dsc-fallback-control:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 1px; }
     .dsc-fallback-check { display: flex; align-items: flex-start; gap: 8px; color: var(--lumiverse-text-muted); font-size: .78rem; }
     .dsc-details { border-top: 1px solid var(--lumiverse-border); padding-top: 10px; }
-    .dsc-details > summary { color: var(--lumiverse-text); font-size: .82rem; font-weight: 600; cursor: pointer; }
+    .dsc-details > summary { display: flex; align-items: center; gap: 8px; list-style: none; color: var(--lumiverse-text); font-size: .82rem; font-weight: 600; cursor: pointer; }
+    .dsc-details > summary::-webkit-details-marker { display: none; }
+    .dsc-details > summary::before { content: "›"; display: inline-block; color: var(--lumiverse-text-muted); font-size: 1.1rem; line-height: 1; transform: rotate(0deg); transition: transform .15s ease; }
+    .dsc-details[open] > summary::before { transform: rotate(90deg); }
     .dsc-details-body { display: grid; gap: 12px; padding-top: 12px; }
-    .dsc-native-section-body { display: grid; gap: 12px; padding-top: 10px; }
     .dsc-state { box-sizing: border-box; width: 100%; margin: 10px 0 0; padding: 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: var(--lumiverse-fill-subtle); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow: auto; font-size: .72rem; color: var(--lumiverse-text-muted); }
+    .dsc-snapshot { padding-top: 2px; border-top: 1px solid var(--lumiverse-border); }
+    .dsc-snapshot-empty { color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); font-size: .76rem; line-height: 1.45; }
+    .dsc-snapshot-groups { display: grid; gap: 12px; }
+    .dsc-snapshot-group { display: grid; gap: 7px; padding: 10px 12px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: var(--lumiverse-fill-subtle); }
+    .dsc-snapshot-heading { color: var(--lumiverse-text); font-size: .76rem; font-weight: 600; }
+    .dsc-snapshot-list { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 5px 12px; margin: 0; }
+    .dsc-snapshot-list dt { color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); font-size: .7rem; }
+    .dsc-snapshot-list dd { min-width: 0; margin: 0; color: var(--lumiverse-text-muted); font-size: .74rem; line-height: 1.4; overflow-wrap: anywhere; }
+    .dsc-npc-list { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--lumiverse-text-muted); font-size: .74rem; line-height: 1.4; }
     .ds-state-card .ds-engine-checking, .ds-state-card .ds-engine-missing { display: none !important; }
     .ds-state-card .ds-engine-live { display: inline !important; }
     .ds-state-card ${PROFILE_BUTTON_SELECTOR} { display: none !important; animation: none !important; }
-    .ds-state-card[data-engine-manual="true"] ${PROFILE_BUTTON_SELECTOR} { display: inline-flex !important; visibility: visible !important; opacity: 1 !important; pointer-events: auto !important; }
+    .ds-state-card[data-engine-manual="true"] ${PROFILE_BUTTON_SELECTOR} { display: inline-flex !important; visibility: visible !important; pointer-events: auto; }
+    .ds-state-card[data-engine-manual="true"] ${PROFILE_BUTTON_SELECTOR}[data-lumiverse-regex-action-used],
+    .ds-state-card[data-engine-manual="true"] ${PROFILE_BUTTON_SELECTOR}[aria-disabled="true"] { opacity: .55 !important; pointer-events: none !important; cursor: not-allowed !important; }
     .ds-tracker-status[data-engine-level="green"] { color: var(--lumiverse-success, #86aF92) !important; }
     .ds-tracker-status[data-engine-level="amber"] { color: var(--lumiverse-warning, #c89b62) !important; }
   `);
@@ -213,6 +225,16 @@ export function setup(ctx) {
   const advancedHost = document.createElement("div");
   const privateHost = document.createElement("div");
 
+  const snapshotSection = document.createElement("section");
+  snapshotSection.className = "dsc-section dsc-snapshot";
+  const snapshotTitle = document.createElement("div");
+  snapshotTitle.className = "dsc-section-title";
+  snapshotTitle.textContent = "Continuity snapshot";
+  const snapshotContent = document.createElement("div");
+  snapshotContent.className = "dsc-snapshot-empty";
+  snapshotContent.textContent = "No tracked scene is available yet.";
+  snapshotSection.append(snapshotTitle, snapshotContent);
+
   const actionsSection = document.createElement("section");
   actionsSection.className = "dsc-actions-section";
   const actions = document.createElement("div");
@@ -222,7 +244,7 @@ export function setup(ctx) {
   actionStatus.textContent = "Reprocess and migration progress will appear here.";
   actionsSection.append(actions, actionStatus);
 
-  panel.append(statusRow, settingsSection, advancedHost, actionsSection, privateHost);
+  panel.append(statusRow, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
   tab.root.appendChild(panel);
 
   const stateText = document.createElement("pre");
@@ -255,25 +277,19 @@ export function setup(ctx) {
     connectionField.field.appendChild(connectionStatus);
     settingsSection.append(enabledRow, connectionField.field);
 
-    const advancedMount = ctx.components.mountCollapsibleSection(advancedHost, {
-      title: "Advanced settings",
-      defaultExpanded: false,
-    });
-    mountedComponents.push(advancedMount);
-    advancedMount.body.classList.add("dsc-native-section-body");
+    // Lumiverse's mounted CollapsibleSection removes its body from the DOM while
+    // closed. Persistent details keep child component mounts alive and editable.
+    const advanced = createFallbackDetails("Advanced settings", false);
+    advancedHost.appendChild(advanced.element);
     const outputField = createField("Structured output mode", "Auto follows the selected connection provider.");
     const maxTokensField = createField("Maximum tracker output tokens", "Allowed range: 400–2,000 tokens.");
     const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–300 seconds.");
-    advancedMount.body.append(outputField.field, maxTokensField.field, timeoutField.field);
+    advanced.body.append(outputField.field, maxTokensField.field, timeoutField.field);
 
-    const privateMount = ctx.components.mountCollapsibleSection(privateHost, {
-      title: "Private tracker state",
-      defaultExpanded: false,
-    });
-    mountedComponents.push(privateMount);
-    privateMount.body.classList.add("dsc-native-section-body");
+    const privateDetails = createFallbackDetails("Private tracker state", false);
+    privateHost.appendChild(privateDetails.element);
     const showPrivateSlot = document.createElement("div");
-    privateMount.body.append(showPrivateSlot, stateText);
+    privateDetails.body.append(showPrivateSlot, stateText);
 
     const enabled = ctx.components.mountSwitch(enabledSlot, {
       checked: true,
@@ -552,6 +568,76 @@ export function setup(ctx) {
     );
   }
 
+  function renderPublicState(publicState) {
+    snapshotContent.replaceChildren();
+    if (!publicState?.scene || !publicState?.arc) {
+      snapshotContent.className = "dsc-snapshot-empty";
+      snapshotContent.textContent = "No tracked scene is available yet.";
+      return;
+    }
+
+    snapshotContent.className = "dsc-snapshot-groups";
+    const addGroup = (title, entries) => {
+      const group = document.createElement("div");
+      group.className = "dsc-snapshot-group";
+      const heading = document.createElement("div");
+      heading.className = "dsc-snapshot-heading";
+      heading.textContent = title;
+      const list = document.createElement("dl");
+      list.className = "dsc-snapshot-list";
+      for (const [label, value] of entries) {
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const description = document.createElement("dd");
+        description.textContent = typeof value === "string" && value ? value : "Unknown";
+        list.append(term, description);
+      }
+      group.append(heading, list);
+      snapshotContent.appendChild(group);
+    };
+
+    const scene = publicState.scene;
+    const woman = scene.womanCurrent ?? {};
+    addGroup("Current scene", [
+      ["Date", scene.date],
+      ["Time", scene.time],
+      ["Weather", scene.weather],
+      ["Location", scene.location],
+      ["Context", scene.immediateContext],
+      ["Man visible", scene.manVisible],
+      ["Spatial", scene.spatial],
+    ]);
+    addGroup("Woman — observable continuity", [
+      ["Hair & grooming", woman.hairAndGrooming],
+      ["Dress", woman.dress],
+      ["Physical state", woman.physicalState],
+    ]);
+
+    const relationship = publicState.arc.relationship ?? {};
+    addGroup("Relationship", [
+      ["Status", relationship.establishedStatus],
+      ["Latest change", relationship.latestChange],
+    ]);
+
+    const npcs = Array.isArray(publicState.arc.npcs) ? publicState.arc.npcs : [];
+    if (npcs.length > 0) {
+      const group = document.createElement("div");
+      group.className = "dsc-snapshot-group";
+      const heading = document.createElement("div");
+      heading.className = "dsc-snapshot-heading";
+      heading.textContent = "NPCs";
+      const list = document.createElement("ul");
+      list.className = "dsc-npc-list";
+      for (const npc of npcs) {
+        const item = document.createElement("li");
+        item.textContent = `${npc.name} — ${npc.role}; ${npc.relationship}; ${npc.currentStatus}`;
+        list.appendChild(item);
+      }
+      group.append(heading, list);
+      snapshotContent.appendChild(group);
+    }
+  }
+
   function profileCardsForStatus(status) {
     if (!status?.caseMessageId) return [];
     const bubble = ctx.dom.findMessageElement(status.caseMessageId);
@@ -597,7 +683,6 @@ export function setup(ctx) {
         button.hidden = false;
         button.disabled = false;
         button.textContent = "Save Manually";
-        delete button.dataset.lumiverseRegexActionUsed;
       }
     }, 4_000);
     cardWatchdogs.set(card, timer);
@@ -625,11 +710,6 @@ export function setup(ctx) {
         button.textContent = "Save Manually";
         button.hidden = !presentation.manual;
         button.disabled = !presentation.manual;
-        if (presentation.state === "saved") {
-          button.dataset.lumiverseRegexActionUsed = "true";
-        } else {
-          delete button.dataset.lumiverseRegexActionUsed;
-        }
       }
     }
   }
@@ -658,6 +738,7 @@ export function setup(ctx) {
     controls.maxTokens.set(status.config?.maxTokens ?? 2_000);
     controls.timeout.set(Math.round((status.config?.timeoutMs ?? 45_000) / 1_000));
     renderConnections();
+    renderPublicState(status.publicState);
     stateText.textContent = controls.showPrivate.get() === true && status.state
       ? JSON.stringify(status.state, null, 2)
       : "Private state is hidden.";

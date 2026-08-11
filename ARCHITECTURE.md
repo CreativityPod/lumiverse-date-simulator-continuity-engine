@@ -32,7 +32,9 @@ The companion card exposes stable checking, live-engine, and manual-fallback hoo
 
 ## Frontend components
 
-The Continuity drawer uses Lumiverse host-mounted switches, selects, numeric inputs, badges, checkboxes, and collapsible sections when the shared component bridge is available. Action buttons use Lumiverse theme tokens because the host does not expose a general mounted button. If any required shared component is unavailable, the drawer falls back as one complete set to themed HTML controls instead of mixing two visual systems.
+The Continuity drawer uses Lumiverse host-mounted switches, selects, numeric inputs, badges, and checkboxes when the shared component bridge is available. Advanced and private sections use persistent theme-matched HTML details because Lumiverse's mounted collapsible removes its body while closed, which would destroy nested component mounts. Action buttons use Lumiverse theme tokens because the host does not expose a general mounted button. If any required shared form component is unavailable, the drawer falls back as one complete set to themed HTML controls instead of mixing two visual systems.
+
+Every status payload also contains a deliberately narrow public projection for the drawer. It includes observable scene facts, visible temporary appearance/state, established relationship status, latest public change, and public NPC fields. Mental state, boundaries, objectives, NPC intentions, and source-message identifiers never enter this projection. The complete canonical JSON is returned only after the user enables private-state inspection.
 
 ## Migration
 

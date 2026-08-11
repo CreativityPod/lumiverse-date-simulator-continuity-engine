@@ -90,6 +90,29 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 300_000);
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 900_000 }).timeoutMs, 300_000);
 
+  const privateState = cloneEmptyState();
+  privateState.scene.womanCurrent.mentalState = "Privately uncertain";
+  privateState.arc.relationship.womanPosture = "Privately guarded";
+  privateState.arc.relationship.activeBoundaryOrConcern = "Private boundary";
+  privateState.arc.relationship.sourceMessageId = "a-private";
+  privateState.arc.npcs.push({
+    name: "Nia",
+    role: "Friend",
+    relationship: "Woman's friend",
+    currentStatus: "At the cafe",
+    immediateObjective: "Privately assess the man",
+  });
+  privateState.arc.objectives.push({ owner: "Woman", objective: "Private objective", status: "Active" });
+  const publicState = backendTest.publicTrackerSnapshot(privateState);
+  assert.equal(publicState.scene.womanCurrent.mentalState, undefined);
+  assert.equal(publicState.arc.relationship.womanPosture, undefined);
+  assert.equal(publicState.arc.relationship.activeBoundaryOrConcern, undefined);
+  assert.equal(publicState.arc.relationship.sourceMessageId, undefined);
+  assert.equal(publicState.arc.npcs[0].immediateObjective, undefined);
+  assert.equal(publicState.arc.objectives, undefined);
+  assert.equal(publicState.scene.womanCurrent.dress, "Unknown");
+  assert.equal(publicState.arc.npcs[0].name, "Nia");
+
   const setupPrompt = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
     { role: "user", content: "Surprise me" },
