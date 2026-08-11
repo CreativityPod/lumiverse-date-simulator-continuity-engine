@@ -171,6 +171,52 @@ function sendFrontend(payload, userId = frontendUserId) {
   }
 }
 
+export function publicTrackerSnapshot(state) {
+  if (!state || typeof state !== "object") return null;
+  const scene = state.scene && typeof state.scene === "object" ? state.scene : {};
+  const woman = scene.womanCurrent && typeof scene.womanCurrent === "object"
+    ? scene.womanCurrent
+    : {};
+  const arc = state.arc && typeof state.arc === "object" ? state.arc : {};
+  const relationship = arc.relationship && typeof arc.relationship === "object"
+    ? arc.relationship
+    : {};
+  const text = (value, fallback = "Unknown") => (
+    typeof value === "string" && value.trim() ? value : fallback
+  );
+
+  return {
+    scene: {
+      date: text(scene.date),
+      time: text(scene.time),
+      weather: text(scene.weather),
+      location: text(scene.location),
+      immediateContext: text(scene.immediateContext),
+      womanCurrent: {
+        hairAndGrooming: text(woman.hairAndGrooming),
+        dress: text(woman.dress),
+        physicalState: text(woman.physicalState),
+      },
+      manVisible: text(scene.manVisible),
+      spatial: text(scene.spatial),
+    },
+    arc: {
+      npcs: Array.isArray(arc.npcs)
+        ? arc.npcs.map((npc) => ({
+          name: text(npc?.name),
+          role: text(npc?.role),
+          relationship: text(npc?.relationship),
+          currentStatus: text(npc?.currentStatus),
+        }))
+        : [],
+      relationship: {
+        establishedStatus: text(relationship.establishedStatus, "No relationship status established."),
+        latestChange: text(relationship.latestChange, "No recent relationship change."),
+      },
+    },
+  };
+}
+
 async function statusPayload(chatId, options = {}) {
   const config = await loadConfig();
   const base = readiness(config);
@@ -207,6 +253,7 @@ async function statusPayload(chatId, options = {}) {
     lastWarning: store.lastWarning || "",
     revision: store.revision || 0,
     updatedAt: store.lastUpdatedAt || "",
+    publicState: publicTrackerSnapshot(store.current),
   };
   if (payload.migrationRequired) {
     payload.level = "amber";
@@ -675,6 +722,7 @@ spindle.log.info("Date Simulator Continuity Engine loaded.");
 
 export const backendTest = Object.freeze({
   normalizeConfig,
+  publicTrackerSnapshot,
   readiness,
   safeChatToken,
   adoptActiveChat,
