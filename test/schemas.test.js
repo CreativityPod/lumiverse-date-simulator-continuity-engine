@@ -5,6 +5,7 @@ import {
   TRACKER_JSON_SCHEMA,
   cloneEmptyState,
   recoverTrackerStateDetailed,
+  upgradeTrackerState,
   validateTrackerState,
   validateTrackerStateDetailed,
 } from "../src/schemas.js";
@@ -15,6 +16,9 @@ test("accepts the documented minimal scene and arc schema", () => {
   state.scene.manVisible = "User-established navy jacket; no injury established.";
   state.arc.relationship.latestChange = "She agreed to another date.";
   state.arc.relationship.sourceMessageId = "assistant-1";
+  state.arc.response.personalInterest = "Growing from neutral to mild interest.";
+  state.arc.response.latestChange = "Personal interest increased after reciprocal conversation.";
+  state.arc.response.sourceMessageId = "assistant-1";
   state.arc.objectives.push({
     owner: "Elena",
     objective: "Confirm the restaurant for Friday.",
@@ -45,6 +49,11 @@ test("rejects extra fields, oversized objectives, and forged source ids", () => 
   forged.arc.relationship.latestChange = "Changed";
   forged.arc.relationship.sourceMessageId = "wrong";
   assert.equal(validateTrackerState(forged, { sourceMessageId: "right" }), null);
+
+  const forgedResponse = cloneEmptyState();
+  forgedResponse.arc.response.latestChange = "Attraction increased.";
+  forgedResponse.arc.response.sourceMessageId = "wrong";
+  assert.equal(validateTrackerState(forgedResponse, { sourceMessageId: "right" }), null);
 });
 
 test("recovers harmless leaf and objective failures without discarding valid sections", () => {
@@ -82,6 +91,49 @@ test("preserves the prior relationship when source linkage is unsupported", () =
   });
   assert.deepEqual(recovered.state.arc.relationship, previous.arc.relationship);
   assert.match(recovered.warnings.join("; "), /source linkage was invalid/);
+});
+
+test("preserves prior private response when source linkage is unsupported", () => {
+  const previous = cloneEmptyState();
+  previous.arc.response.personalInterest = "Mild and uncertain.";
+  previous.arc.response.latestChange = "Personal interest increased slightly.";
+  previous.arc.response.sourceMessageId = "a-prior";
+  const candidate = structuredClone(previous);
+  candidate.arc.response.romanticInterest = "Strong.";
+  candidate.arc.response.latestChange = "Romantic interest jumped.";
+  candidate.arc.response.sourceMessageId = "forged";
+
+  const recovered = recoverTrackerStateDetailed(candidate, {
+    previousState: previous,
+    allowedSourceMessageIds: ["a-current", "a-prior"],
+  });
+  assert.deepEqual(recovered.state.arc.response, previous.arc.response);
+  assert.match(recovered.warnings.join("; "), /response source linkage was invalid/);
+});
+
+test("upgrades schema-v1 checkpoints with conservative unknown response state", () => {
+  const legacy = cloneEmptyState();
+  legacy.schemaVersion = 1;
+  delete legacy.arc.response;
+  legacy.scene.location = "Cafe";
+  const upgraded = upgradeTrackerState(legacy);
+  assert.equal(upgraded.schemaVersion, 2);
+  assert.equal(upgraded.scene.location, "Cafe");
+  assert.equal(upgraded.arc.response.physicalAttraction, "Unknown");
+  assert.equal(upgraded.arc.response.sourceMessageId, "");
+});
+
+test("enforces the nonsexual private-response value in Teen Mode", () => {
+  const candidate = cloneEmptyState();
+  candidate.arc.response.sexualInterest = "Mild";
+  assert.equal(validateTrackerState(candidate, { teenMode: true }), null);
+  assert.match(
+    validateTrackerStateDetailed(candidate, { teenMode: true }).error,
+    /Not applicable in Teen Mode/,
+  );
+  const recovered = recoverTrackerStateDetailed(candidate, { teenMode: true });
+  assert.equal(recovered.state.arc.response.sexualInterest, "Not applicable in Teen Mode.");
+  assert.match(recovered.warnings.join("; "), /Teen Mode nonsexual value/);
 });
 
 test("provider schema avoids regex and bounded-repetition grammar traps", () => {

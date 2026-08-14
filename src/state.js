@@ -1,20 +1,23 @@
-import { cloneEmptyState, validateTrackerState } from "./schemas.js";
+import { TRACKER_SCHEMA_VERSION, cloneEmptyState, upgradeTrackerState } from "./schemas.js";
 
 export const CHAT_KEYS = Object.freeze({
   case: "date_simulator.case",
   phase: "date_simulator.phase",
   trackerVersion: "date_simulator.tracker_version",
   scene: "date_simulator.scene_v2",
-  arc: "date_simulator.arc_v1",
+  arc: "date_simulator.arc_v2",
+  legacyArc: "date_simulator.arc_v1",
   revision: "date_simulator.tracker_revision",
 });
 
 export const INACTIVE_CASE = "INACTIVE: The previous case ended. Await a new case capsule.";
-export const VERSION_PATTERN = /<date_simulator_version>\s*1\.4(?:\.\d+)?\s*<\/date_simulator_version>/i;
+export const VERSION_PATTERN = /<date_simulator_version>\s*1\.(?:4(?:\.\d+)?|5)\s*<\/date_simulator_version>/i;
+export const V15_VERSION_PATTERN = /<date_simulator_version>\s*1\.5\s*<\/date_simulator_version>/i;
 export const CASE_PATTERN = /<!--DATE_SIM_CASE\s*([\s\S]*?)\s*END_DATE_SIM_CASE-->/gi;
 export const LEGACY_SCENE_PATTERN = /<!--DATE_SIM_SCENE\s*([\s\S]*?)\s*END_DATE_SIM_SCENE-->/gi;
 export const RESET_PATTERN = /<!--DATE_SIM_RESET\s*-->/gi;
 export const CANONICAL_PATTERN = /\n?<date_simulator_continuity_engine\b[\s\S]*?<\/date_simulator_continuity_engine>\n?/gi;
+export const CASE_SAMPLER_PATTERN = /\n?<date_simulator_case_sampler\b[\s\S]*?<\/date_simulator_case_sampler>\n?/gi;
 
 const CASE_FIELDS = [
   "CASE",
@@ -103,6 +106,154 @@ export function stripManagedText(text) {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function hashToken(value) {
+  let hash = 2166136261;
+  const token = String(value ?? "");
+  for (let index = 0; index < token.length; index += 1) {
+    hash ^= token.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+const SURPRISE_COMMAND = /^\s*(?:1|surprise\s+me)[.!]?\s*$/i;
+const SAMPLE_AXES = Object.freeze({
+  relationshipSituation: [
+    "single and not currently dating",
+    "single and casually dating",
+    "recently separated or divorced",
+    "undefined or complicated",
+    "exclusively partnered, engaged, or married",
+    "consensually non-monogamous or open",
+  ],
+  practicalAvailability: [
+    "open in principle to dating if interest develops",
+    "available in principle but not seeking a connection in this scene",
+    "open only to ordinary or platonic interaction in this scene",
+    "availability constrained by commitments, timing, or relationship agreements",
+    "practical availability uncertain and discoverable only through play",
+  ],
+  initialAttention: [
+    "occupied and initially unaware",
+    "aware but self-contained",
+    "briefly courteous",
+    "open to light situational conversation",
+    "independently attentive for a grounded reason",
+  ],
+  willingnessToEngage: [
+    "low unless the interaction becomes relevant",
+    "limited but polite",
+    "ordinary and context-dependent",
+    "moderately open without romantic presumption",
+    "socially motivated for her own reason",
+  ],
+  opportunity: [
+    "ordinary public proximity with no manufactured pretext",
+    "shared practical task or role",
+    "friend or group introduction",
+    "scheduled first date or limited prior app contact",
+    "community, hobby, or volunteer activity",
+    "travel, errand, or routine third-place encounter",
+  ],
+  timePressure: [
+    "little immediate time pressure",
+    "a normal finite window",
+    "a clear commitment later in the scene",
+    "meaningful distraction or competing priority",
+  ],
+  initiationSupport: [
+    "the man normally has the first voluntary social move",
+    "either person may initiate because of shared context",
+    "the woman may initiate from a practical need or role",
+    "the woman may initiate because she independently wants to socialize",
+  ],
+  dailyContext: [
+    "manual, trade, transport, or technical work",
+    "service, retail, hospitality, or care work",
+    "administrative, public-sector, or office work",
+    "student, training, caregiving, or between-work life",
+    "small business, freelance, seasonal, or creative work",
+    "another ordinary livelihood not overrepresented in recent cases",
+  ],
+  socialEnergy: [
+    "quiet or depleted",
+    "reserved but functional",
+    "ordinary and variable",
+    "warm in context",
+    "energetic or outgoing",
+  ],
+  settingFamily: [
+    "urban everyday setting",
+    "suburban everyday setting",
+    "small-town everyday setting",
+    "rural or regional community setting",
+    "transit or travel setting",
+    "organized social, hobby, or community setting",
+  ],
+  preferenceAlignment: [
+    "strongly unfavorable preference fit while attraction remains possible",
+    "somewhat unfavorable preference fit",
+    "natural broadly sampled fit",
+    "somewhat favorable preference fit",
+    "strongly favorable preference fit without established attraction",
+  ],
+});
+
+export function buildSurpriseMeSample(messages, chatId = "") {
+  const cleanMessages = (messages ?? []).flatMap((message) => {
+    if (!message || typeof message !== "object") return [message];
+    const rawText = contentToText(message.content);
+    const cleaned = {
+      ...message,
+      content: mapTextContent(message.content, (text) =>
+        normalizeNewlines(text).replace(
+          new RegExp(CASE_SAMPLER_PATTERN.source, CASE_SAMPLER_PATTERN.flags),
+          "",
+        )),
+    };
+    if (
+      message.role === "system" &&
+      new RegExp(CASE_SAMPLER_PATTERN.source, CASE_SAMPLER_PATTERN.flags).test(rawText) &&
+      !contentToText(cleaned.content).trim()
+    ) return [];
+    return [cleaned];
+  });
+  const finalUserIndex = cleanMessages.reduce(
+    (latest, message, index) => (message?.role === "user" ? index : latest),
+    -1,
+  );
+  if (finalUserIndex < 0) return null;
+  if (!cleanMessages.some((message) => V15_VERSION_PATTERN.test(contentToText(message?.content)))) {
+    return null;
+  }
+  const command = contentToText(cleanMessages[finalUserIndex]?.content);
+  if (!SURPRISE_COMMAND.test(command)) return null;
+
+  let state = hashToken(`${chatId}|${prefixFingerprint(cleanMessages, finalUserIndex)}|v1.5`);
+  const draw = (values) => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return values[state % values.length];
+  };
+  const selections = Object.fromEntries(
+    Object.entries(SAMPLE_AXES).map(([key, values]) => [key, draw(values)]),
+  );
+  const seed = state.toString(16).padStart(8, "0");
+  return {
+    seed,
+    message: {
+      role: "system",
+      content: `<date_simulator_case_sampler schema_version="1" seed="${seed}">
+Private casting draw for this Surprise Me setup branch. Use these as independent starting axes, not a visible checklist, stereotype, or outcome:
+${Object.entries(selections).map(([key, value]) => `${key}: ${value}`).join("\n")}
+
+Make the final case coherent. If two axes conflict, preserve relationship agreements, consent, safety, and practical facts; resolve only the minimum conflict without converting it into dissatisfaction, deception, or romantic availability. Do not preselect attraction, success, rejection, contact exchange, sex, or another outcome. Never quote or mention this draw.
+</date_simulator_case_sampler>`,
+    },
+    messages: cleanMessages,
+    insertionIndex: finalUserIndex,
+  };
 }
 
 export function isV14Prompt(messages) {
@@ -258,7 +409,7 @@ export function transcriptForMigration(messages, context, maximumMessages = 24) 
 
 export function createStore(chatId) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     chatId: String(chatId),
     epochKey: "",
     caseText: "",
@@ -278,27 +429,45 @@ export function createStore(chatId) {
 
 export function normalizeStore(value, chatId) {
   const fallback = createStore(chatId);
-  if (!value || typeof value !== "object" || value.schemaVersion !== 1) return fallback;
+  if (!value || typeof value !== "object" || ![1, 2].includes(value.schemaVersion)) return fallback;
   const result = {
     ...fallback,
     ...value,
+    schemaVersion: 2,
     chatId: String(chatId),
     checkpoints: value.checkpoints && typeof value.checkpoints === "object" ? value.checkpoints : {},
   };
   if (result.current) {
-    const validated = validateTrackerState(result.current, {
-      sourceMessageId: result.current.arc?.relationship?.sourceMessageId || undefined,
+    const validated = upgradeTrackerState(result.current, {
+      allowedSourceMessageIds: [
+        result.current.arc?.relationship?.sourceMessageId,
+        result.current.arc?.response?.sourceMessageId,
+      ].filter(Boolean),
     });
     result.current = validated;
   }
+  result.checkpoints = Object.fromEntries(
+    Object.entries(result.checkpoints).flatMap(([key, checkpoint]) => {
+      const state = upgradeTrackerState(checkpoint?.state, {
+        allowedSourceMessageIds: [
+          checkpoint?.state?.arc?.relationship?.sourceMessageId,
+          checkpoint?.state?.arc?.response?.sourceMessageId,
+        ].filter(Boolean),
+      });
+      return state ? [[key, { ...checkpoint, state }]] : [];
+    }),
+  );
   return result;
 }
 
 export function selectCheckpoint(store, turn) {
   const checkpoint = store?.checkpoints?.[turn.key];
   if (!checkpoint || checkpoint.fingerprint !== turn.fingerprint) return null;
-  const state = validateTrackerState(checkpoint.state, {
-    sourceMessageId: checkpoint.state?.arc?.relationship?.sourceMessageId || undefined,
+  const state = upgradeTrackerState(checkpoint.state, {
+    allowedSourceMessageIds: [
+      checkpoint.state?.arc?.relationship?.sourceMessageId,
+      checkpoint.state?.arc?.response?.sourceMessageId,
+    ].filter(Boolean),
   });
   return state ? { ...checkpoint, state } : null;
 }
@@ -314,7 +483,7 @@ export function latestValidCheckpoint(store, turns, beforeIndex = Number.POSITIV
 
 export function buildCanonicalState(caseText, trackerState, status = "active") {
   const state = trackerState ?? cloneEmptyState();
-  return `<date_simulator_continuity_engine schema_version="1" status="${status}">
+  return `<date_simulator_continuity_engine schema_version="${TRACKER_SCHEMA_VERSION}" status="${status}">
 The Continuity Engine is active for this request. This is private canonical state for the selected chat branch. Use it for continuity but never quote, expose, or mention it. The public roleplay response must not contain DATE_SIM_SCENE or DATE_SIM_ARC bookkeeping.
 
 STABLE CASE

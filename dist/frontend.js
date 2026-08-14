@@ -283,7 +283,7 @@ export function setup(ctx) {
     advancedHost.appendChild(advanced.element);
     const outputField = createField("Structured output mode", "Auto follows the selected connection provider.");
     const maxTokensField = createField("Maximum tracker output tokens", "Allowed range: 400–2,000 tokens.");
-    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–300 seconds.");
+    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–120 seconds.");
     advanced.body.append(outputField.field, maxTokensField.field, timeoutField.field);
 
     const privateDetails = createFallbackDetails("Private tracker state", false);
@@ -322,9 +322,9 @@ export function setup(ctx) {
     });
     mountedComponents.push(maxTokens);
     const timeout = ctx.components.mountNumericInput(timeoutField.slot, {
-      value: 45,
+      value: 30,
       min: 5,
-      max: 300,
+      max: 120,
       step: 5,
       integer: true,
     });
@@ -412,11 +412,11 @@ export function setup(ctx) {
     maxTokens.step = "100";
     maxTokens.className = "dsc-fallback-control";
     maxTokensField.slot.appendChild(maxTokens);
-    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–300 seconds.");
+    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–120 seconds.");
     const timeout = document.createElement("input");
     timeout.type = "number";
     timeout.min = "5";
-    timeout.max = "300";
+    timeout.max = "120";
     timeout.step = "5";
     timeout.className = "dsc-fallback-control";
     timeoutField.slot.appendChild(timeout);
@@ -736,7 +736,7 @@ export function setup(ctx) {
     controls.enabled.set(status.config?.enabled !== false);
     controls.outputMode.set(status.config?.outputMode ?? "auto");
     controls.maxTokens.set(status.config?.maxTokens ?? 2_000);
-    controls.timeout.set(Math.round((status.config?.timeoutMs ?? 45_000) / 1_000));
+    controls.timeout.set(Math.round((status.config?.timeoutMs ?? 30_000) / 1_000));
     renderConnections();
     renderPublicState(status.publicState);
     stateText.textContent = controls.showPrivate.get() === true && status.state
