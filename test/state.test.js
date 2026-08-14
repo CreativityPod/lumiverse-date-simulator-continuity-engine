@@ -103,9 +103,9 @@ test("compacts private markers and injects exactly one canonical block", () => {
   assert.equal(stripManagedText(caseEnvelope), "");
 });
 
-test("recognizes v1.5 prompts without promoting prompt-only examples", () => {
+test("recognizes v1.5 patch prompts without promoting prompt-only examples", () => {
   const messages = [
-    { role: "system", content: "<date_simulator_version>1.5</date_simulator_version>" },
+    { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
     { role: "assistant", content: `Example only.\n${caseEnvelope}` },
   ];
   assert.equal(isV14Prompt(messages), true);
@@ -137,7 +137,7 @@ test("normalizes schema-v1 stores and checkpoints to tracker schema v2", () => {
 
 test("builds one deterministic prompt-only Surprise Me casting draw", () => {
   const messages = [
-    { role: "system", content: "<date_simulator_version>1.5</date_simulator_version>" },
+    { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
     { id: "u1", role: "user", content: "Surprise Me" },
   ];
   const first = buildSurpriseMeSample(messages, "chat-sample");

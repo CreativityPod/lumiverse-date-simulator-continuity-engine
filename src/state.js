@@ -11,8 +11,8 @@ export const CHAT_KEYS = Object.freeze({
 });
 
 export const INACTIVE_CASE = "INACTIVE: The previous case ended. Await a new case capsule.";
-export const VERSION_PATTERN = /<date_simulator_version>\s*1\.(?:4(?:\.\d+)?|5)\s*<\/date_simulator_version>/i;
-export const V15_VERSION_PATTERN = /<date_simulator_version>\s*1\.5\s*<\/date_simulator_version>/i;
+export const VERSION_PATTERN = /<date_simulator_version>\s*1\.(?:4|5)(?:\.\d+)?\s*<\/date_simulator_version>/i;
+export const V15_VERSION_PATTERN = /<date_simulator_version>\s*1\.5(?:\.\d+)?\s*<\/date_simulator_version>/i;
 export const CASE_PATTERN = /<!--DATE_SIM_CASE\s*([\s\S]*?)\s*END_DATE_SIM_CASE-->/gi;
 export const LEGACY_SCENE_PATTERN = /<!--DATE_SIM_SCENE\s*([\s\S]*?)\s*END_DATE_SIM_SCENE-->/gi;
 export const RESET_PATTERN = /<!--DATE_SIM_RESET\s*-->/gi;

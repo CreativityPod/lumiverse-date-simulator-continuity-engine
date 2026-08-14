@@ -118,7 +118,7 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(publicState.arc.npcs[0].name, "Nia");
 
   const setupPrompt = [
-    { role: "system", content: "<date_simulator_version>1.5</date_simulator_version>" },
+    { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
     { role: "user", content: "Surprise me" },
   ];
   const sampledSetup = await interceptor(setupPrompt, { chatId: "chat-1" });

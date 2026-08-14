@@ -168,7 +168,7 @@ function readiness(config) {
   return {
     level: "green",
     code: "ready",
-    text: "Continuity Engine ready. Open a Date Simulator v1.4 or v1.5 chat to begin tracking.",
+    text: "Continuity Engine ready. Open a Date Simulator v1.4.x or v1.5.x chat to begin tracking.",
   };
 }
 
@@ -294,7 +294,7 @@ async function statusPayload(chatId, options = {}) {
     payload.text = "Continuity Engine active. Private profile saved; scene and arc tracking are automatic.";
   } else if (base.level === "green") {
     payload.code = "ready_no_profile";
-    payload.text = "Continuity Engine ready. No Date Simulator v1.4 or v1.5 private profile was found in this chat yet.";
+    payload.text = "Continuity Engine ready. No Date Simulator v1.4.x or v1.5.x private profile was found in this chat yet.";
   }
   if (options.includePrivate) payload.state = store.current;
   return payload;
