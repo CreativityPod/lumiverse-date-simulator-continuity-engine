@@ -105,18 +105,45 @@ function supportsNativeComponents(ctx) {
   return names.every((name) => typeof ctx.components?.[name] === "function");
 }
 
-function cardsInside(root) {
-  if (!(root instanceof Element)) return [];
+function isElementLike(value) {
+  return Boolean(
+    value
+    && value.nodeType === 1
+    && typeof value.matches === "function"
+    && typeof value.querySelectorAll === "function",
+  );
+}
+
+export function cardsInside(root) {
   const cards = [];
-  if (root.matches(PROFILE_CARD_SELECTOR) || root.querySelector(PROFILE_BUTTON_SELECTOR)) {
-    const card = root.matches(".ds-state-card") ? root : root.closest(".ds-state-card");
-    if (card) cards.push(card);
+  const visited = new Set();
+
+  function visit(scope) {
+    if (!scope || visited.has(scope) || typeof scope.querySelectorAll !== "function") return;
+    visited.add(scope);
+
+    if (isElementLike(scope)) {
+      if (scope.matches(PROFILE_CARD_SELECTOR)) cards.push(scope);
+      if (scope.matches(PROFILE_BUTTON_SELECTOR)) {
+        const card = scope.closest?.(".ds-state-card");
+        if (card) cards.push(card);
+      }
+      if (scope.matches(".ds-state-card") && scope.querySelector(PROFILE_BUTTON_SELECTOR)) {
+        cards.push(scope);
+      }
+    }
+
+    cards.push(...scope.querySelectorAll(PROFILE_CARD_SELECTOR));
+    for (const button of scope.querySelectorAll(PROFILE_BUTTON_SELECTOR)) {
+      const card = button.closest?.(".ds-state-card");
+      if (card) cards.push(card);
+    }
+    for (const element of scope.querySelectorAll("*")) {
+      if (element.shadowRoot) visit(element.shadowRoot);
+    }
   }
-  cards.push(...root.querySelectorAll(PROFILE_CARD_SELECTOR));
-  for (const button of root.querySelectorAll(PROFILE_BUTTON_SELECTOR)) {
-    const card = button.closest(".ds-state-card");
-    if (card) cards.push(card);
-  }
+
+  visit(root);
   return [...new Set(cards)];
 }
 
@@ -638,19 +665,59 @@ export function setup(ctx) {
     }
   }
 
+  function mountedProfileCards() {
+    const cards = new Set();
+    if (typeof ctx.dom.listMessageElements === "function") {
+      for (const entry of ctx.dom.listMessageElements()) {
+        for (const card of cardsInside(entry?.element ?? entry)) cards.add(card);
+      }
+    }
+    if (cards.size === 0) {
+      for (const card of cardsInside(document)) cards.add(card);
+    }
+    return [...cards];
+  }
+
   function profileCardsForStatus(status) {
     if (!status?.caseMessageId) return [];
     const bubble = ctx.dom.findMessageElement(status.caseMessageId);
     const exact = cardsInside(bubble);
     if (exact.length > 0) return exact;
 
-    const fallback = [];
-    for (const card of document.querySelectorAll(".ds-state-card")) {
-      if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
-        fallback.push(card);
-      }
-    }
+    const fallback = mountedProfileCards();
     return fallback.length > 0 ? [fallback.at(-1)] : [];
+  }
+
+  function setImportantStyle(element, property, value) {
+    element?.style?.setProperty(property, value, "important");
+  }
+
+  function applyProfileCardChrome(card, { manual, level = "green" }) {
+    const checking = card.querySelector(".ds-engine-checking");
+    const missing = card.querySelector(".ds-engine-missing");
+    const live = card.querySelector(".ds-engine-live");
+    const badge = card.querySelector(".ds-tracker-status");
+    const button = card.querySelector(PROFILE_BUTTON_SELECTOR);
+
+    setImportantStyle(checking, "display", "none");
+    setImportantStyle(missing, "display", "none");
+    setImportantStyle(live, "display", "inline");
+    setImportantStyle(live, "visibility", "visible");
+    if (badge) {
+      setImportantStyle(
+        badge,
+        "color",
+        level === "amber"
+          ? "var(--lumiverse-warning, #c89b62)"
+          : "var(--lumiverse-success, #86af92)",
+      );
+    }
+    if (button) {
+      setImportantStyle(button, "display", manual ? "inline-flex" : "none");
+      setImportantStyle(button, "visibility", manual ? "visible" : "hidden");
+      setImportantStyle(button, "pointer-events", manual ? "auto" : "none");
+      setImportantStyle(button, "animation", "none");
+    }
   }
 
   function clearCardWatchdog(card) {
@@ -662,14 +729,16 @@ export function setup(ctx) {
   }
 
   function armCardWatchdog(card) {
-    if (!(card instanceof Element) || cardWatchdogs.has(card)) return;
+    if (!isElementLike(card) || cardWatchdogs.has(card)) return;
     if (!card.dataset.engineState) card.dataset.engineState = "checking";
+    applyProfileCardChrome(card, { manual: false, level: "green" });
     const timer = setTimeout(() => {
       watchdogTimers.delete(timer);
       cardWatchdogs.delete(card);
       if (!card.isConnected || card.dataset.engineState !== "checking") return;
       card.dataset.engineState = "frontend-only";
       card.dataset.engineManual = "true";
+      applyProfileCardChrome(card, { manual: true, level: "amber" });
       const badge = card.querySelector(".ds-tracker-status");
       if (badge) {
         badge.dataset.engineLevel = "amber";
@@ -696,6 +765,7 @@ export function setup(ctx) {
       clearCardWatchdog(card);
       card.dataset.engineState = presentation.state;
       card.dataset.engineManual = presentation.manual ? "true" : "false";
+      applyProfileCardChrome(card, presentation);
       const badge = card.querySelector(".ds-tracker-status");
       if (badge) {
         badge.dataset.engineLevel = presentation.level;
@@ -806,11 +876,7 @@ export function setup(ctx) {
     observer.observe(document.body, { childList: true, subtree: true });
     cleanups.push(() => observer.disconnect());
   }
-  for (const card of document.querySelectorAll(".ds-state-card")) {
-    if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
-      armCardWatchdog(card);
-    }
-  }
+  for (const card of mountedProfileCards()) armCardWatchdog(card);
   cleanups.push(() => {
     for (const timer of watchdogTimers) clearTimeout(timer);
     watchdogTimers.clear();
@@ -849,11 +915,13 @@ export function setup(ctx) {
   cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
     latestStatus = null;
+    for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
   }));
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
       if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
+      for (const card of mountedProfileCards()) armCardWatchdog(card);
       requestStatus();
       scheduleProfileCardSync();
     }));

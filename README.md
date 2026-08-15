@@ -52,7 +52,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.2.1 and the card's current persistent-state companion are installed. The companion opts the card out of Lumiverse HTML-island isolation so the extension can detect and update it; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.2.2 and the card's current persistent-state companion are installed. Version 1.2.2 detects and updates profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -66,6 +66,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 - Version 1.0.11 opts the profile card out of Lumiverse HTML-island isolation, preserves claimed manual-button styling, keeps mounted advanced/private controls alive inside persistent details sections, and adds an always-visible privacy-safe continuity snapshot.
 - Version 1.2.0 supports Date Simulator v1.5, upgrades schema-v1 checkpoints conservatively, adds the private qualitative response vector, mirrors full arc state to `date_simulator.arc_v2` while retaining a response-free `arc_v1` compatibility mirror, and aligns tracker and manifest timeouts with Lumiverse's interceptor budget. Its Surprise Me sampler injects exactly one branch-stable private draw before the final setup command while leaving other setup paths and active cases unchanged.
 - Version 1.2.1 expands v1.5 recognition to v1.5.x patch cards and updates readiness diagnostics accordingly; tracker schema and behavior remain unchanged.
+- Version 1.2.2 traverses open Shadow DOM HTML islands for profile-card lookup, applies status presentation inside the shadow root, and rescans mounted message bubbles so automatic profile confirmation remains visible under Lumiverse HTML isolation and virtualization.
 
 ## Development
 

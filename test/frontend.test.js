@@ -1,7 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { profileCardPresentation } from "../src/frontend.js";
+import { cardsInside, profileCardPresentation } from "../src/frontend.js";
+
+test("finds a profile card inside an open Shadow DOM island without realm checks", () => {
+  const card = {
+    nodeType: 1,
+    matches: (selector) => selector.includes("ds-state-card"),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const shadowRoot = {
+    querySelectorAll: (selector) => {
+      if (selector === ".ds-state-card[data-ds-profile-card='true']") return [card];
+      if (selector === "*") return [card];
+      return [];
+    },
+  };
+  const host = {
+    nodeType: 1,
+    shadowRoot,
+    matches: () => false,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const documentRoot = {
+    querySelectorAll: (selector) => selector === "*" ? [host] : [],
+  };
+
+  assert.deepEqual(cardsInside(documentRoot), [card]);
+});
 
 test("saved profiles hide the manual fallback even while tracker status is degraded", () => {
   const presentation = profileCardPresentation({
