@@ -114,18 +114,46 @@ function supportsNativeComponents(ctx) {
   return names.every((name) => typeof ctx.components?.[name] === "function");
 }
 
-function cardsInside(root) {
-  if (!(root instanceof Element)) return [];
+function isElementLike(value) {
+  return Boolean(
+    value &&
+    value.nodeType === 1 &&
+    typeof value.matches === "function" &&
+    typeof value.querySelectorAll === "function"
+  );
+}
+
+export function cardsInside(root) {
   const cards = [];
-  if (root.matches(PROFILE_CARD_SELECTOR) || root.querySelector(PROFILE_BUTTON_SELECTOR)) {
-    const card = root.matches(".ds-state-card") ? root : root.closest(".ds-state-card");
-    if (card) cards.push(card);
+  const visited = new Set();
+
+  function visit(scope) {
+    if (!scope || visited.has(scope) || typeof scope.querySelectorAll !== "function") return;
+    visited.add(scope);
+
+    if (isElementLike(scope)) {
+      if (scope.matches(PROFILE_CARD_SELECTOR)) cards.push(scope);
+      if (scope.matches(PROFILE_BUTTON_SELECTOR)) {
+        const card = scope.closest?.(".ds-state-card");
+        if (card) cards.push(card);
+      }
+      if (scope.matches(".ds-state-card") && scope.querySelector(PROFILE_BUTTON_SELECTOR)) {
+        cards.push(scope);
+      }
+    }
+
+    cards.push(...scope.querySelectorAll(PROFILE_CARD_SELECTOR));
+    for (const button of scope.querySelectorAll(PROFILE_BUTTON_SELECTOR)) {
+      const card = button.closest?.(".ds-state-card");
+      if (card) cards.push(card);
+    }
+
+    for (const element of scope.querySelectorAll("*")) {
+      if (element.shadowRoot) visit(element.shadowRoot);
+    }
   }
-  cards.push(...root.querySelectorAll(PROFILE_CARD_SELECTOR));
-  for (const button of root.querySelectorAll(PROFILE_BUTTON_SELECTOR)) {
-    const card = button.closest(".ds-state-card");
-    if (card) cards.push(card);
-  }
+
+  visit(root);
   return [...new Set(cards)];
 }
 
@@ -670,13 +698,63 @@ function setupInternal(ctx) {
     const exact = cardsInside(bubble);
     if (exact.length > 0) return exact;
 
-    const fallback = [];
-    for (const card of document.querySelectorAll(".ds-state-card")) {
-      if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
-        fallback.push(card);
+    const fallback = new Set();
+    if (typeof ctx.dom.listMessageElements === "function") {
+      for (const entry of ctx.dom.listMessageElements()) {
+        for (const card of cardsInside(entry?.element)) fallback.add(card);
       }
     }
-    return fallback.length > 0 ? [fallback.at(-1)] : [];
+    if (fallback.size === 0) {
+      for (const card of cardsInside(document)) fallback.add(card);
+    }
+    const cards = [...fallback];
+    return cards.length > 0 ? [cards.at(-1)] : [];
+  }
+
+  function mountedProfileCards() {
+    const cards = new Set();
+    if (typeof ctx.dom.listMessageElements === "function") {
+      for (const entry of ctx.dom.listMessageElements()) {
+        for (const card of cardsInside(entry?.element)) cards.add(card);
+      }
+    }
+    if (cards.size === 0) {
+      for (const card of cardsInside(document)) cards.add(card);
+    }
+    return [...cards];
+  }
+
+  function setImportantDisplay(element, display) {
+    element?.style?.setProperty("display", display, "important");
+  }
+
+  function applyProfileCardChrome(card, { manual, level = "green" }) {
+    const checking = card.querySelector?.(".ds-engine-checking");
+    const missing = card.querySelector?.(".ds-engine-missing");
+    const live = card.querySelector?.(".ds-engine-live");
+    const badge = card.querySelector?.(".ds-tracker-status");
+    const button = card.querySelector?.(PROFILE_BUTTON_SELECTOR);
+
+    // Regex output may live inside a Shadow DOM HTML island. Document-level
+    // extension styles cannot cross that boundary, so mirror the live-engine
+    // presentation directly on the discovered card as well.
+    setImportantDisplay(checking, "none");
+    setImportantDisplay(missing, "none");
+    setImportantDisplay(live, "inline");
+    if (badge) {
+      const color = level === "amber"
+        ? "var(--lumiverse-warning, #c89b62)"
+        : "var(--lumiverse-success, #86af92)";
+      badge.style?.setProperty("color", color, "important");
+    }
+    if (button) {
+      button.hidden = !manual;
+      button.disabled = !manual;
+      setImportantDisplay(button, manual ? "inline-flex" : "none");
+      button.style?.setProperty("visibility", manual ? "visible" : "hidden", "important");
+      button.style?.setProperty("pointer-events", manual ? "auto" : "none", "important");
+      button.style?.setProperty("animation", "none", "important");
+    }
   }
 
   function clearCardWatchdog(card) {
@@ -688,11 +766,13 @@ function setupInternal(ctx) {
   }
 
   function armCardWatchdog(card) {
-    if (!(card instanceof Element) || cardWatchdogs.has(card)) return;
+    if (!isElementLike(card) || cardWatchdogs.has(card)) return;
     if (!card.dataset.engineState) card.dataset.engineState = "checking";
+    applyProfileCardChrome(card, { manual: false, level: "green" });
     debugFrontend("profile_card_watchdog_armed", {
       connected: card.isConnected,
       state: card.dataset.engineState,
+      rootType: card.getRootNode?.()?.constructor?.name ?? "unknown",
     });
     const timer = setTimeout(() => {
       watchdogTimers.delete(timer);
@@ -704,6 +784,7 @@ function setupInternal(ctx) {
       });
       card.dataset.engineState = "frontend-only";
       card.dataset.engineManual = "true";
+      applyProfileCardChrome(card, { manual: true, level: "amber" });
       const badge = card.querySelector(".ds-tracker-status");
       if (badge) {
         badge.dataset.engineLevel = "amber";
@@ -745,6 +826,10 @@ function setupInternal(ctx) {
       clearCardWatchdog(card);
       card.dataset.engineState = presentation.state;
       card.dataset.engineManual = presentation.manual ? "true" : "false";
+      applyProfileCardChrome(card, {
+        manual: presentation.manual,
+        level: presentation.level,
+      });
       const badge = card.querySelector(".ds-tracker-status");
       if (badge) {
         badge.dataset.engineLevel = presentation.level;
@@ -873,14 +958,14 @@ function setupInternal(ctx) {
       hasDocumentBody: Boolean(document.body),
     });
   }
-  let existingProfileCardCount = 0;
-  for (const card of document.querySelectorAll(".ds-state-card")) {
-    if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
-      existingProfileCardCount += 1;
-      armCardWatchdog(card);
-    }
-  }
-  debugFrontend("existing_profile_cards_scanned", { cardCount: existingProfileCardCount });
+  const existingProfileCards = mountedProfileCards();
+  for (const card of existingProfileCards) armCardWatchdog(card);
+  debugFrontend("existing_profile_cards_scanned", {
+    cardCount: existingProfileCards.length,
+    shadowCardCount: existingProfileCards.filter(
+      (card) => card.getRootNode?.()?.constructor?.name === "ShadowRoot",
+    ).length,
+  });
   cleanups.push(() => {
     for (const timer of watchdogTimers) clearTimeout(timer);
     watchdogTimers.clear();
@@ -925,12 +1010,22 @@ function setupInternal(ctx) {
     debugFrontend("chat_switched", { hasChatId: Boolean(payload?.chatId) });
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
     latestStatus = null;
+    for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
   }));
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
       debugFrontend("chat_event", { eventName, hasChatId: Boolean(payload?.chatId) });
       if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
+      const cards = mountedProfileCards();
+      debugFrontend("profile_cards_rescanned", {
+        eventName,
+        cardCount: cards.length,
+        shadowCardCount: cards.filter(
+          (card) => card.getRootNode?.()?.constructor?.name === "ShadowRoot",
+        ).length,
+      });
+      for (const card of cards) armCardWatchdog(card);
       requestStatus();
       scheduleProfileCardSync();
     }));
