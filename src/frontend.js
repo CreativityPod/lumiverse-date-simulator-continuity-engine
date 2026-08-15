@@ -53,6 +53,41 @@ export function profileCardPresentation(status) {
   };
 }
 
+export function formatLocalTimestamp(value, locales, options = {}) {
+  if (typeof value !== "string" || !value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat(locales, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      ...options,
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+export function privateStatePresentation(visible, status, cached = null) {
+  if (!visible) {
+    return { text: "Private state is hidden.", cache: null };
+  }
+  if (!status?.chatId) {
+    return { text: "No active chat.", cache: null };
+  }
+
+  let nextCache = cached?.chatId === status.chatId ? cached : null;
+  if (Object.prototype.hasOwnProperty.call(status, "state")) {
+    nextCache = { chatId: status.chatId, state: status.state };
+  }
+  return {
+    text: nextCache
+      ? JSON.stringify(nextCache.state, null, 2)
+      : "Loading private state…",
+    cache: nextCache,
+  };
+}
+
 function createButton(text, action, primary = false) {
   const button = document.createElement("button");
   button.type = "button";
@@ -155,6 +190,8 @@ export function setup(ctx) {
   let activeChatId = null;
   let connectionDiagnostic = "Loading connection profiles…";
   let connectionPermissionGranted = null;
+  let showPrivateState = false;
+  let privateStateCache = null;
   let cardSyncQueued = false;
   const cardWatchdogs = new WeakMap();
   const watchdogTimers = new Set();
@@ -359,7 +396,7 @@ export function setup(ctx) {
       checked: false,
       label: "Show private tracker state",
       hint: "Displays extension-owned continuity data for this chat.",
-      onChange: requestStatus,
+      onChange: setPrivateStateVisibility,
     });
     mountedComponents.push(showPrivate);
 
@@ -394,7 +431,7 @@ export function setup(ctx) {
         set: (value) => timeout.update({ value }),
       },
       showPrivate: {
-        get: () => showPrivate.getValue(),
+        get: () => showPrivateState,
       },
       connectionStatus,
     };
@@ -454,7 +491,7 @@ export function setup(ctx) {
     showPrivateLabel.className = "dsc-fallback-check";
     const showPrivate = document.createElement("input");
     showPrivate.type = "checkbox";
-    showPrivate.addEventListener("change", requestStatus);
+    showPrivate.addEventListener("change", () => setPrivateStateVisibility(showPrivate.checked));
     const showPrivateText = document.createElement("span");
     showPrivateText.textContent = "Show extension-owned continuity data for this chat.";
     showPrivateLabel.append(showPrivate, showPrivateText);
@@ -507,7 +544,7 @@ export function setup(ctx) {
         set: (value) => { timeout.value = String(value); },
       },
       showPrivate: {
-        get: () => showPrivate.checked,
+        get: () => showPrivateState,
       },
       connectionStatus,
     };
@@ -553,8 +590,20 @@ export function setup(ctx) {
     ctx.sendToBackend({
       type: "continuity_get_status",
       chatId: activeChatId,
-      includePrivate: controls?.showPrivate.get() === true,
+      includePrivate: showPrivateState,
     });
+  }
+
+  function renderPrivateState(status) {
+    const presentation = privateStatePresentation(showPrivateState, status, privateStateCache);
+    privateStateCache = presentation.cache;
+    stateText.textContent = presentation.text;
+  }
+
+  function setPrivateStateVisibility(visible) {
+    showPrivateState = visible === true;
+    renderPrivateState(latestStatus);
+    requestStatus();
   }
 
   function connectionOptions(selected) {
@@ -796,9 +845,11 @@ export function setup(ctx) {
     latestStatus = status;
     if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
     statusText.textContent = status.text;
+    const localUpdatedAt = formatLocalTimestamp(status.updatedAt);
     statusMeta.textContent = status.chatId
-      ? `Revision ${status.revision || 0}${status.updatedAt ? ` · ${status.updatedAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
+      ? `Revision ${status.revision || 0}${localUpdatedAt ? ` · ${localUpdatedAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
       : "No active chat.";
+    statusMeta.title = status.updatedAt || "";
     const badgeText = status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
     const badgeColor = status.processing ? "info" : status.level === "green" ? "success" : "warning";
     badgeControl.update({ text: badgeText, color: badgeColor });
@@ -808,9 +859,7 @@ export function setup(ctx) {
     controls.timeout.set(Math.round((status.config?.timeoutMs ?? 30_000) / 1_000));
     renderConnections();
     renderPublicState(status.publicState);
-    stateText.textContent = controls.showPrivate.get() === true && status.state
-      ? JSON.stringify(status.state, null, 2)
-      : "Private state is hidden.";
+    renderPrivateState(status);
     tab.setBadge(status.level === "green" ? null : "!");
     updateProfileCards(status);
   }
@@ -914,6 +963,8 @@ export function setup(ctx) {
   cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
     latestStatus = null;
+    privateStateCache = null;
+    renderPrivateState(null);
     for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
   }));
