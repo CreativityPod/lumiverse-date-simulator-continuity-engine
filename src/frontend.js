@@ -1,11 +1,21 @@
 const PROFILE_CARD_SELECTOR = ".ds-state-card[data-ds-profile-card='true']";
 const PROFILE_BUTTON_SELECTOR = ".ds-state-button[data-regex-action='date-sim-save-case']";
+const DEBUG_PREFIX = "[Date Simulator Continuity][frontend]";
 const OUTPUT_MODE_OPTIONS = [
   { value: "auto", label: "Auto detect from connection" },
   { value: "openai", label: "OpenAI-compatible JSON Schema" },
   { value: "anthropic", label: "Anthropic forced tool" },
   { value: "plain", label: "Plain JSON" },
 ];
+
+function debugFrontend(stage, details = {}) {
+  console.info(DEBUG_PREFIX, stage, details);
+}
+
+debugFrontend("module_evaluated", {
+  href: globalThis.location?.href ?? "unknown",
+  readyState: globalThis.document?.readyState ?? "unknown",
+});
 
 export function profileCardPresentation(status) {
   const profileSaved = status?.profileSaved === true;
@@ -119,8 +129,18 @@ function cardsInside(root) {
   return [...new Set(cards)];
 }
 
-export function setup(ctx) {
+function setupInternal(ctx) {
+  debugFrontend("setup_start", {
+    hasDeferReady: typeof ctx?.deferReady === "function",
+    hasReady: typeof ctx?.ready === "function",
+    hasDomAddStyle: typeof ctx?.dom?.addStyle === "function",
+    hasFindMessageElement: typeof ctx?.dom?.findMessageElement === "function",
+    hasDrawerTab: typeof ctx?.ui?.registerDrawerTab === "function",
+    hasBackendMessaging:
+      typeof ctx?.sendToBackend === "function" && typeof ctx?.onBackendMessage === "function",
+  });
   ctx.deferReady();
+  debugFrontend("readiness_deferred");
   const cleanups = [];
   const mountedComponents = [];
   let latestStatus = null;
@@ -186,6 +206,7 @@ export function setup(ctx) {
     .ds-tracker-status[data-engine-level="amber"] { color: var(--lumiverse-warning, #c89b62) !important; }
   `);
   cleanups.push(removeStyle);
+  debugFrontend("profile_card_styles_installed");
 
   const tab = ctx.ui.registerDrawerTab({
     id: "continuity",
@@ -197,6 +218,7 @@ export function setup(ctx) {
     iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v6h6"/><path d="M12 8v4l3 2"/></svg>',
   });
   cleanups.push(() => tab.destroy());
+  debugFrontend("drawer_registered");
 
   const panel = document.createElement("div");
   panel.className = "dsc-panel";
@@ -245,6 +267,7 @@ export function setup(ctx) {
 
   panel.append(statusRow, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
   tab.root.appendChild(panel);
+  debugFrontend("drawer_shell_mounted");
 
   const stateText = document.createElement("pre");
   stateText.className = "dsc-state";
@@ -523,6 +546,10 @@ export function setup(ctx) {
   }
 
   function requestStatus() {
+    debugFrontend("status_requested", {
+      hasActiveChatId: Boolean(activeChatId),
+      includePrivate: controls?.showPrivate.get() === true,
+    });
     ctx.sendToBackend({
       type: "continuity_get_status",
       chatId: activeChatId,
@@ -663,10 +690,18 @@ export function setup(ctx) {
   function armCardWatchdog(card) {
     if (!(card instanceof Element) || cardWatchdogs.has(card)) return;
     if (!card.dataset.engineState) card.dataset.engineState = "checking";
+    debugFrontend("profile_card_watchdog_armed", {
+      connected: card.isConnected,
+      state: card.dataset.engineState,
+    });
     const timer = setTimeout(() => {
       watchdogTimers.delete(timer);
       cardWatchdogs.delete(card);
       if (!card.isConnected || card.dataset.engineState !== "checking") return;
+      debugFrontend("profile_card_watchdog_expired", {
+        connected: card.isConnected,
+        state: card.dataset.engineState,
+      });
       card.dataset.engineState = "frontend-only";
       card.dataset.engineManual = "true";
       const badge = card.querySelector(".ds-tracker-status");
@@ -689,9 +724,24 @@ export function setup(ctx) {
   }
 
   function updateProfileCards(status) {
-    if (!status?.caseMessageId) return;
+    if (!status?.caseMessageId) {
+      debugFrontend("profile_card_update_skipped", {
+        reason: "missing_case_message_id",
+        code: status?.code ?? "unknown",
+      });
+      return;
+    }
     const presentation = profileCardPresentation(status);
-    for (const card of profileCardsForStatus(status)) {
+    const cards = profileCardsForStatus(status);
+    debugFrontend("profile_card_update", {
+      cardCount: cards.length,
+      state: presentation.state,
+      level: presentation.level,
+      profileSaved: status?.profileSaved === true,
+      code: status?.code ?? "unknown",
+      revision: Number(status?.revision ?? 0),
+    });
+    for (const card of cards) {
       clearCardWatchdog(card);
       card.dataset.engineState = presentation.state;
       card.dataset.engineManual = presentation.manual ? "true" : "false";
@@ -723,6 +773,17 @@ export function setup(ctx) {
   }
 
   function renderStatus(status) {
+    debugFrontend("status_received", {
+      hasChatId: Boolean(status?.chatId),
+      hasCaseMessageId: Boolean(status?.caseMessageId),
+      profileSaved: status?.profileSaved === true,
+      code: status?.code ?? "unknown",
+      level: status?.level ?? "unknown",
+      processing: status?.processing === true,
+      revision: Number(status?.revision ?? 0),
+      hasError: Boolean(status?.lastError),
+      hasWarning: Boolean(status?.lastWarning),
+    });
     latestStatus = status;
     if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
     statusText.textContent = status.text;
@@ -796,6 +857,7 @@ export function setup(ctx) {
       for (const record of records) {
         const cards = [...record.addedNodes].flatMap(cardsInside);
         if (cards.length > 0) {
+          debugFrontend("profile_card_observed", { cardCount: cards.length });
           for (const card of cards) armCardWatchdog(card);
           scheduleProfileCardSync();
           break;
@@ -804,12 +866,21 @@ export function setup(ctx) {
     });
     observer.observe(document.body, { childList: true, subtree: true });
     cleanups.push(() => observer.disconnect());
+    debugFrontend("profile_card_observer_registered");
+  } else {
+    debugFrontend("profile_card_observer_unavailable", {
+      hasMutationObserver: typeof MutationObserver === "function",
+      hasDocumentBody: Boolean(document.body),
+    });
   }
+  let existingProfileCardCount = 0;
   for (const card of document.querySelectorAll(".ds-state-card")) {
     if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
+      existingProfileCardCount += 1;
       armCardWatchdog(card);
     }
   }
+  debugFrontend("existing_profile_cards_scanned", { cardCount: existingProfileCardCount });
   cleanups.push(() => {
     for (const timer of watchdogTimers) clearTimeout(timer);
     watchdogTimers.clear();
@@ -822,6 +893,11 @@ export function setup(ctx) {
   }));
 
   cleanups.push(ctx.onBackendMessage((payload) => {
+    debugFrontend("backend_message_received", {
+      type: payload?.type ?? "unknown",
+      code: payload?.code ?? payload?.status?.code ?? "unknown",
+      hasChatId: Boolean(payload?.chatId ?? payload?.status?.chatId),
+    });
     if (payload?.type === "continuity_status") renderStatus(payload);
     if (payload?.type === "continuity_connections") {
       latestConnections = Array.isArray(payload.connections) ? payload.connections : [];
@@ -846,12 +922,14 @@ export function setup(ctx) {
   }));
 
   cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
+    debugFrontend("chat_switched", { hasChatId: Boolean(payload?.chatId) });
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
     latestStatus = null;
     requestStatus();
   }));
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
+      debugFrontend("chat_event", { eventName, hasChatId: Boolean(payload?.chatId) });
       if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
       requestStatus();
       scheduleProfileCardSync();
@@ -859,8 +937,10 @@ export function setup(ctx) {
   }
 
   ctx.ready();
+  debugFrontend("frontend_ready");
   requestStatus();
   ctx.sendToBackend({ type: "continuity_get_connections" });
+  debugFrontend("initial_backend_requests_sent");
 
   return () => {
     for (const handle of mountedComponents.reverse()) {
@@ -871,4 +951,13 @@ export function setup(ctx) {
     }
     ctx.dom.cleanup();
   };
+}
+
+export function setup(ctx) {
+  try {
+    return setupInternal(ctx);
+  } catch (error) {
+    console.error(DEBUG_PREFIX, "setup_failed", error);
+    throw error;
+  }
 }

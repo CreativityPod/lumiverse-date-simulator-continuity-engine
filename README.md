@@ -51,6 +51,14 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 
 ## Troubleshooting
 
+### Temporary v1.2.1 diagnostic logging
+
+This working-tree build emits privacy-safe lifecycle diagnostics for the profile-card handshake. It never logs the `DATE_SIM_CASE` body or tracker state.
+
+- Browser DevTools Console: filter for `[Date Simulator Continuity][frontend]`. A healthy load begins with `module_evaluated`, `setup_start`, `profile_card_styles_installed`, and `drawer_registered`, then reaches `frontend_ready`. Profile rendering produces `profile_card_observed` or `existing_profile_cards_scanned`, followed by status messages.
+- Lumiverse server console: filter for `[Date Simulator Continuity][backend]`. A healthy load begins with `module_evaluated`, `interceptor_registered`, and `backend_ready`. Case discovery produces `transcript_scanned` and `stable_profile_persisted` without printing private content.
+- If no frontend-prefixed message appears after a hard reload, the host did not evaluate `dist/frontend.js`. If `module_evaluated` appears but `setup_failed` follows, the browser exception identifies the first incompatible or failed frontend API call.
+
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
 - If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.2.1 and the card's current persistent-state companion are installed. The companion opts the card out of Lumiverse HTML-island isolation so the extension can detect and update it; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Tracking being enabled does not itself grant those permissions.

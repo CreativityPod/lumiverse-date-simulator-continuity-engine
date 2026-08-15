@@ -1461,9 +1461,24 @@ const DEFAULT_CONFIG = Object.freeze({
 const queues = new Map();
 const userByChat = new Map();
 const activeChatByUser = new Map();
+const DEBUG_PREFIX = "[Date Simulator Continuity][backend]";
 let interceptorRegistered = false;
 let activeChatId = null;
 let frontendUserId = undefined;
+
+function debugBackend(stage, details = {}) {
+  try {
+    spindle.log.info(`${DEBUG_PREFIX} ${stage} ${JSON.stringify(details)}`);
+  } catch {
+    // Diagnostics must never affect continuity behavior.
+  }
+}
+
+debugBackend("module_evaluated", {
+  generationPermission: spindle.permissions.has("generation"),
+  interceptorPermission: spindle.permissions.has("interceptor"),
+  chatMutationPermission: spindle.permissions.has("chat_mutation"),
+});
 
 function validUserId(userId) {
   return typeof userId === "string" && Boolean(userId.trim());
@@ -1653,7 +1668,14 @@ function publicTrackerSnapshot(state) {
 async function statusPayload(chatId, options = {}) {
   const config = await loadConfig();
   const base = readiness(config);
-  if (!chatId) return { type: "continuity_status", ...base, config, chatId: null };
+  if (!chatId) {
+    debugBackend("status_built", {
+      hasChatId: false,
+      code: base.code,
+      level: base.level,
+    });
+    return { type: "continuity_status", ...base, config, chatId: null };
+  }
   const store = await loadStore(chatId);
   let caseMessageId = null;
   let profileSaved = false;
@@ -1721,6 +1743,17 @@ async function statusPayload(chatId, options = {}) {
     payload.text = "Continuity Engine ready. No Date Simulator v1.4.x or v1.5.x private profile was found in this chat yet.";
   }
   if (options.includePrivate) payload.state = store.current;
+  debugBackend("status_built", {
+    hasChatId: true,
+    hasCaseMessageId: Boolean(caseMessageId),
+    profileSaved,
+    code: payload.code,
+    level: payload.level,
+    processing: payload.processing,
+    revision: payload.revision,
+    hasError: Boolean(payload.lastError),
+    hasWarning: Boolean(payload.lastWarning),
+  });
   return payload;
 }
 
@@ -1780,11 +1813,30 @@ async function performMigration(chatId, messages, context, store, config, userId
 }
 
 async function reconcileChat(chatId, options = {}, userId) {
-  if (!chatId || !spindle.permissions.has("chat_mutation")) return;
+  if (!chatId || !spindle.permissions.has("chat_mutation")) {
+    debugBackend("reconcile_skipped", {
+      hasChatId: Boolean(chatId),
+      chatMutationPermission: spindle.permissions.has("chat_mutation"),
+    });
+    return;
+  }
+  debugBackend("reconcile_started", {
+    forceLatest: options.forceLatest === true,
+    allowMigration: options.allowMigration === true,
+  });
   const scopedUserId = userForChat(chatId, userId);
   const config = await loadConfig();
   const messages = await spindle.chat.getMessages(chatId);
   const context = deriveTranscriptContext(messages);
+  debugBackend("transcript_scanned", {
+    messageCount: messages.length,
+    activeCase: context.active,
+    hasCaseMessageId: Boolean(context.caseMessageId),
+    hasInvalidCaseMessageId: Boolean(context.invalidCaseMessageId),
+    invalidCases: context.invalidCases,
+    hasCaseError: Boolean(context.caseError),
+    epoch: context.epoch,
+  });
   let store = resetForEpoch(await loadStore(chatId), context);
 
   if (!context.active) {
@@ -1797,6 +1849,7 @@ async function reconcileChat(chatId, options = {}, userId) {
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
     await publishStatus(chatId, {}, scopedUserId);
+    debugBackend("inactive_case_cleared");
     return;
   }
 
@@ -1807,6 +1860,9 @@ async function reconcileChat(chatId, options = {}, userId) {
   await saveStore(chatId, store);
   await mirrorStore(chatId, store, context);
   await publishStatus(chatId, {}, scopedUserId);
+  debugBackend("stable_profile_persisted", {
+    nativeCurrent: /\b(?:Date Simulator\s+)?v1\.(?:4(?:\.\d+)?|5)\b/i.test(context.caseText),
+  });
 
   const nativeCurrent = /\b(?:Date Simulator\s+)?v1\.(?:4(?:\.\d+)?|5)\b/i.test(context.caseText);
   if (!nativeCurrent && !store.migrationAccepted && !options.allowMigration) {
@@ -1841,6 +1897,7 @@ async function reconcileChat(chatId, options = {}, userId) {
   }
 
   if (!config.enabled) {
+    debugBackend("tracker_skipped", { reason: "disabled" });
     store.processing = false;
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
@@ -1848,6 +1905,7 @@ async function reconcileChat(chatId, options = {}, userId) {
     return;
   }
   if (!spindle.permissions.has("generation")) {
+    debugBackend("tracker_skipped", { reason: "missing_generation_permission" });
     store.processing = false;
     store.lastError = "Generation permission is not granted.";
     await saveStore(chatId, store);
@@ -1925,6 +1983,11 @@ async function reconcileChat(chatId, options = {}, userId) {
         previousState = result.state;
         store.lastWarning = result.warnings.join("; ").slice(0, 500);
         store.revision += 1;
+        debugBackend("tracker_checkpoint_committed", {
+          turnIndex: index,
+          revision: store.revision,
+          warningCount: result.warnings.length,
+        });
       }
 
       const liveKeys = new Set(turns.map((turn) => turn.key));
@@ -1937,17 +2000,32 @@ async function reconcileChat(chatId, options = {}, userId) {
     store.lastUpdatedAt = new Date().toISOString();
   } catch (error) {
     store.lastError = String(error?.message ?? error).slice(0, 500);
+    debugBackend("reconcile_failed", {
+      errorName: error?.name ?? "Error",
+      errorMessage: store.lastError,
+    });
     spindle.log.warn(`Date Simulator continuity update failed for ${chatId}: ${store.lastError}`);
   } finally {
     store.processing = false;
     await saveStore(chatId, store);
     await mirrorStore(chatId, store, context);
     await publishStatus(chatId, {}, scopedUserId);
+    debugBackend("reconcile_finished", {
+      revision: store.revision,
+      hasCurrentState: Boolean(store.current),
+      hasError: Boolean(store.lastError),
+      hasWarning: Boolean(store.lastWarning),
+    });
   }
 }
 
 function scheduleReconcile(chatId, options = {}, userId) {
   if (!chatId) return Promise.resolve();
+  debugBackend("reconcile_queued", {
+    alreadyQueued: queues.has(chatId),
+    forceLatest: options.forceLatest === true,
+    allowMigration: options.allowMigration === true,
+  });
   const scopedUserId = userForChat(chatId, userId);
   const previous = queues.get(chatId) ?? Promise.resolve();
   const current = previous
@@ -2021,9 +2099,16 @@ async function interceptPrompt(messages, context) {
 }
 
 function tryRegisterInterceptor() {
-  if (interceptorRegistered || !spindle.permissions.has("interceptor")) return;
+  if (interceptorRegistered || !spindle.permissions.has("interceptor")) {
+    debugBackend("interceptor_registration_skipped", {
+      interceptorRegistered,
+      interceptorPermission: spindle.permissions.has("interceptor"),
+    });
+    return;
+  }
   spindle.registerInterceptor(interceptPrompt, 250);
   interceptorRegistered = true;
+  debugBackend("interceptor_registered");
   spindle.log.info("Date Simulator Continuity Engine interceptor registered.");
 }
 
@@ -2035,12 +2120,20 @@ for (const eventName of [
   "SWIPE_EDITED",
 ]) {
   spindle.on(eventName, (payload, userId) => {
+    debugBackend("chat_event_received", {
+      eventName,
+      hasChatId: Boolean(payload?.chatId),
+    });
     const chatId = adoptActiveChat(payload?.chatId, userId);
     return scheduleReconcile(chatId, {}, userId);
   });
 }
 
 spindle.on("CHAT_SWITCHED", (payload, userId) => {
+  debugBackend("chat_event_received", {
+    eventName: "CHAT_SWITCHED",
+    hasChatId: Boolean(payload?.chatId),
+  });
   if (typeof payload?.chatId === "string" && payload.chatId) {
     const chatId = adoptActiveChat(payload.chatId, userId);
     scheduleReconcile(chatId, {}, userId);
@@ -2057,6 +2150,7 @@ spindle.on("CHAT_SWITCHED", (payload, userId) => {
 });
 
 spindle.permissions.onChanged(({ permission, granted }) => {
+  debugBackend("permission_changed", { permission, granted });
   if (permission === "interceptor" && granted) tryRegisterInterceptor();
   if (activeChatId) scheduleReconcile(activeChatId);
 });
@@ -2064,6 +2158,10 @@ spindle.permissions.onChanged(({ permission, granted }) => {
 spindle.onFrontendMessage(async (payload, userId) => {
   frontendUserId = userId;
   const type = payload?.type;
+  debugBackend("frontend_message_received", {
+    type: type ?? "unknown",
+    hasChatId: Boolean(payload?.chatId),
+  });
   if (type === "continuity_get_status") {
     const chatId = adoptActiveChat(payload.chatId, userId);
     if (chatId) scheduleReconcile(chatId, {}, userId);
@@ -2162,6 +2260,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
 });
 
 tryRegisterInterceptor();
+debugBackend("backend_ready");
 spindle.log.info("Date Simulator Continuity Engine loaded.");
 
 const backendTest = Object.freeze({
