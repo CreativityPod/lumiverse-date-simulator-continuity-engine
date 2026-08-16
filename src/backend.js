@@ -1,4 +1,7 @@
 import {
+  TRACKER_SCHEMA_VERSION,
+} from "./schemas.js";
+import {
   CHAT_KEYS,
   INACTIVE_CASE,
   buildSurpriseMeSample,
@@ -143,7 +146,11 @@ async function mirrorStore(chatId, store, context) {
   await Promise.all([
     setVariableIfChanged(chatId, CHAT_KEYS.case, context.active ? context.caseText : INACTIVE_CASE),
     setVariableIfChanged(chatId, CHAT_KEYS.phase, context.active ? "active" : "setup"),
-    setVariableIfChanged(chatId, CHAT_KEYS.trackerVersion, context.active ? "2" : ""),
+    setVariableIfChanged(
+      chatId,
+      CHAT_KEYS.trackerVersion,
+      context.active ? String(TRACKER_SCHEMA_VERSION) : "",
+    ),
     setVariableIfChanged(chatId, CHAT_KEYS.scene, current ? JSON.stringify(current.scene) : ""),
     setVariableIfChanged(chatId, CHAT_KEYS.arc, current ? JSON.stringify(current.arc) : ""),
     setVariableIfChanged(chatId, CHAT_KEYS.legacyArc, legacyArc ? JSON.stringify(legacyArc) : ""),
@@ -186,6 +193,9 @@ export function publicTrackerSnapshot(state) {
   const woman = scene.womanCurrent && typeof scene.womanCurrent === "object"
     ? scene.womanCurrent
     : {};
+  const womanStable = scene.womanStable && typeof scene.womanStable === "object"
+    ? scene.womanStable
+    : {};
   const arc = state.arc && typeof state.arc === "object" ? state.arc : {};
   const relationship = arc.relationship && typeof arc.relationship === "object"
     ? arc.relationship
@@ -201,6 +211,12 @@ export function publicTrackerSnapshot(state) {
       weather: text(scene.weather),
       location: text(scene.location),
       immediateContext: text(scene.immediateContext),
+      womanStable: {
+        face: text(womanStable.face),
+        eyes: text(womanStable.eyes),
+        skin: text(womanStable.skin),
+        bodyTypeAndProportions: text(womanStable.bodyTypeAndProportions),
+      },
       womanCurrent: {
         hairAndGrooming: text(woman.hairAndGrooming),
         dress: text(woman.dress),

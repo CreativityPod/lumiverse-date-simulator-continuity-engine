@@ -2,7 +2,7 @@
 
 The extension is split into five small modules:
 
-- `schemas.js`: strict current-scene and current-arc schema, private-response validation, and conservative schema-v1 upgrade.
+- `schemas.js`: strict current-scene and current-arc schema, private-response validation, and conservative schema-v1/v2 upgrade.
 - `state.js`: capsule parsing, branch fingerprints, checkpoint selection, prompt compaction, and canonical injection.
 - `tracker.js`: provider-aware quiet generation, prompts, JSON extraction, and validation.
 - `backend.js`: storage, queues, event reconciliation, migration, variable mirrors, readiness, and prompt interception.
@@ -12,7 +12,7 @@ The extension is split into five small modules:
 
 Each chat has one extension-owned JSON store under `chats/`. It contains the active epoch, current state, per-turn checkpoints, migration baseline, revision, last revision time, and diagnostic status. Revision number and `lastRevisionAt` are committed together only when a tracker or migration checkpoint is created; verification-only reconciliation never changes them. Chat IDs are reduced to safe storage tokens. The backend mirrors scene v2, full arc v2, and a response-free arc v1 compatibility view to private chat variables, but extension storage is canonical.
 
-Store and tracker schema v1 are upgraded locally to schema v2 by preserving every validated scene, NPC, relationship, and objective value and initializing the new response fields conservatively as unknown. Stored transcript messages are never rewritten, so the state can be rebuilt from the selected branch if an extension rollback discards the newer sidecar store.
+Tracker schema v1 and v2 states are upgraded locally to schema v3. Existing validated scene, NPC, relationship, response, and objective values are preserved; schema-v1 response fields and pre-v3 stable woman-appearance fields initialize conservatively as unknown. The extension store remains schema v2 because its envelope did not change. Stored transcript messages are never rewritten, so the state can be rebuilt from the selected branch if an extension rollback discards the newer sidecar store.
 
 ## Update transaction
 
@@ -40,7 +40,7 @@ The companion card exposes stable checking, live-engine, and manual-fallback hoo
 
 The Continuity drawer uses Lumiverse host-mounted switches, selects, numeric inputs, badges, and checkboxes when the shared component bridge is available. Advanced and private sections use persistent theme-matched HTML details because Lumiverse's mounted collapsible removes its body while closed, which would destroy nested component mounts. Action buttons use Lumiverse theme tokens because the host does not expose a general mounted button. If any required shared form component is unavailable, the drawer falls back as one complete set to themed HTML controls instead of mixing two visual systems.
 
-Every status payload also contains a deliberately narrow public projection for the drawer. It includes observable scene facts, visible temporary appearance/state, established relationship status, latest public change, and public NPC fields. Mental state, boundaries, objectives, NPC intentions, the complete private response vector, and source-message identifiers never enter this projection. The complete canonical JSON is returned only after the user enables private-state inspection.
+Every status payload also contains a deliberately narrow public projection for the drawer. It includes observable scene facts, the woman's stable visible face/eyes/skin/body traits and temporary appearance/state, established relationship status, latest public change, and public NPC fields. Mental state, boundaries, objectives, NPC intentions, the complete private response vector, and source-message identifiers never enter this projection. The complete canonical JSON is returned only after the user enables private-state inspection.
 
 ## Migration
 

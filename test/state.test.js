@@ -98,7 +98,7 @@ test("compacts private markers and injects exactly one canonical block", () => {
   assert.equal(compacted.messages[2].role, "system");
   assert.match(compacted.messages[2].content, /CURRENT SCENE/);
   assert.match(compacted.messages[2].content, /"response"/);
-  assert.match(compacted.messages[2].content, /schema_version="2"/);
+  assert.match(compacted.messages[2].content, /schema_version="3"/);
   assert.match(buildCanonicalState(CASE, cloneEmptyState()), /status="active"/);
   assert.equal(stripManagedText(caseEnvelope), "");
 });
@@ -112,10 +112,10 @@ test("recognizes v1.5 patch prompts without promoting prompt-only examples", () 
   const context = deriveTranscriptContext([]);
   assert.equal(context.active, false);
   const compacted = compactPromptMessages(messages, CASE, cloneEmptyState());
-  assert.match(compacted.messages.map((message) => String(message.content)).join("\n"), /schema_version="2"/);
+  assert.match(compacted.messages.map((message) => String(message.content)).join("\n"), /schema_version="3"/);
 });
 
-test("normalizes schema-v1 stores and checkpoints to tracker schema v2", () => {
+test("normalizes schema-v1 stores and checkpoints to tracker schema v3", () => {
   const legacyState = cloneEmptyState();
   legacyState.schemaVersion = 1;
   delete legacyState.arc.response;
@@ -130,9 +130,10 @@ test("normalizes schema-v1 stores and checkpoints to tracker schema v2", () => {
   }, "chat-current");
   assert.equal(store.schemaVersion, 2);
   assert.equal(store.chatId, "chat-current");
-  assert.equal(store.current.schemaVersion, 2);
+  assert.equal(store.current.schemaVersion, 3);
   assert.equal(store.current.scene.location, "Legacy cafe");
   assert.equal(store.checkpoints["a1::0"].state.arc.response.rapportAndTrust, "Unknown");
+  assert.equal(store.checkpoints["a1::0"].state.scene.womanStable.face, "Unknown");
 });
 
 test("builds one deterministic prompt-only Surprise Me casting draw", () => {

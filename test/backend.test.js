@@ -91,6 +91,10 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 120_000);
 
   const privateState = cloneEmptyState();
+  privateState.scene.womanStable.face = "Oval face with a small chin scar.";
+  privateState.scene.womanStable.eyes = "Dark brown, almond-shaped eyes.";
+  privateState.scene.womanStable.skin = "Medium-brown skin with freckles.";
+  privateState.scene.womanStable.bodyTypeAndProportions = "Tall, sturdy build with balanced proportions.";
   privateState.scene.womanCurrent.mentalState = "Privately uncertain";
   privateState.arc.relationship.womanPosture = "Privately guarded";
   privateState.arc.relationship.activeBoundaryOrConcern = "Private boundary";
@@ -115,6 +119,13 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(publicState.arc.npcs[0].immediateObjective, undefined);
   assert.equal(publicState.arc.objectives, undefined);
   assert.equal(publicState.scene.womanCurrent.dress, "Unknown");
+  assert.equal(publicState.scene.womanStable.face, "Oval face with a small chin scar.");
+  assert.equal(publicState.scene.womanStable.eyes, "Dark brown, almond-shaped eyes.");
+  assert.equal(publicState.scene.womanStable.skin, "Medium-brown skin with freckles.");
+  assert.equal(
+    publicState.scene.womanStable.bodyTypeAndProportions,
+    "Tall, sturdy build with balanced proportions.",
+  );
   assert.equal(publicState.arc.npcs[0].name, "Nia");
 
   const setupPrompt = [
@@ -155,9 +166,10 @@ test("background reconciliation saves state and the interceptor injects one bran
   await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: opening }, "user-1");
 
   assert.equal(variables.get("chat-1:date_simulator.phase"), "active");
-  assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "2");
+  assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "3");
   assert.match(variables.get("chat-1:date_simulator.case"), /DS-V14-BACKEND/);
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).date, "Unknown");
+  assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).womanStable.face, "Unknown");
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.arc_v2")).response.physicalAttraction, "Unknown");
   const firstRevisionStore = files.get("chats/chat-1.json");
   const firstCheckpoint = Object.values(firstRevisionStore.checkpoints)[0];

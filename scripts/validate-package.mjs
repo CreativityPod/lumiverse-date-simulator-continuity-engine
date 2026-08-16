@@ -40,8 +40,10 @@ check(frontend.includes("createFallbackDetails"), "Frontend keeps mounted contro
 check(!frontend.includes("mountCollapsibleSection"), "Frontend does not mount controls inside unmounting host collapsibles");
 check(frontend.includes("Continuity snapshot"), "Frontend presents a privacy-safe public continuity snapshot");
 check(backend.includes("publicTrackerSnapshot"), "Backend publishes a privacy-safe tracker projection");
-check(backend.includes("physicalAttraction"), "Backend bundle contains tracker schema v2 private response state");
-check(backend.includes("upgradeTrackerState"), "Backend bundle upgrades schema-v1 tracker state");
+check(backend.includes("physicalAttraction"), "Backend bundle contains tracker schema v3 private response state");
+check(backend.includes("bodyTypeAndProportions"), "Backend bundle contains stable woman appearance state");
+check(frontend.includes("Body type & proportions"), "Frontend exposes stable woman appearance state");
+check(backend.includes("upgradeTrackerState"), "Backend bundle upgrades older tracker state");
 check(backend.includes("buildSurpriseMeSample"), "Backend bundle contains the prompt-only Surprise Me sampler");
 check(frontend.includes("MutationObserver"), "Frontend self-heals delayed profile-card rendering");
 check(frontend.includes("data-engine-manual"), "Frontend owns the manual-fallback visibility handshake");

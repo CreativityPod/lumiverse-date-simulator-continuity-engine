@@ -1,4 +1,4 @@
-export const TRACKER_SCHEMA_VERSION = 2;
+export const TRACKER_SCHEMA_VERSION = 3;
 
 export const EMPTY_SCENE = Object.freeze({
   date: "Unknown",
@@ -6,6 +6,12 @@ export const EMPTY_SCENE = Object.freeze({
   weather: "Unknown",
   location: "Unknown",
   immediateContext: "Unknown",
+  womanStable: Object.freeze({
+    face: "Unknown",
+    eyes: "Unknown",
+    skin: "Unknown",
+    bodyTypeAndProportions: "Unknown",
+  }),
   womanCurrent: Object.freeze({
     hairAndGrooming: "Unknown",
     dress: "Unknown",
@@ -50,10 +56,12 @@ const SCENE_KEYS = [
   "weather",
   "location",
   "immediateContext",
+  "womanStable",
   "womanCurrent",
   "manVisible",
   "spatial",
 ];
+const WOMAN_STABLE_KEYS = ["face", "eyes", "skin", "bodyTypeAndProportions"];
 const WOMAN_KEYS = ["hairAndGrooming", "dress", "physicalState", "mentalState"];
 const ARC_KEYS = ["npcs", "relationship", "response", "objectives"];
 const NPC_KEYS = ["name", "role", "relationship", "currentStatus", "immediateObjective"];
@@ -178,6 +186,7 @@ export function cloneEmptyState() {
     schemaVersion: TRACKER_SCHEMA_VERSION,
     scene: {
       ...EMPTY_SCENE,
+      womanStable: { ...EMPTY_SCENE.womanStable },
       womanCurrent: { ...EMPTY_SCENE.womanCurrent },
     },
     arc: {
@@ -206,6 +215,8 @@ export function validateTrackerStateDetailed(candidate, options = {}) {
   }
   const sceneKeyError = keyValidationError(candidate.scene, SCENE_KEYS, "scene");
   if (sceneKeyError) return fail(sceneKeyError);
+  const womanStableKeyError = keyValidationError(candidate.scene.womanStable, WOMAN_STABLE_KEYS, "scene.womanStable");
+  if (womanStableKeyError) return fail(womanStableKeyError);
   const womanKeyError = keyValidationError(candidate.scene.womanCurrent, WOMAN_KEYS, "scene.womanCurrent");
   if (womanKeyError) return fail(womanKeyError);
   const arcKeyError = keyValidationError(candidate.arc, ARC_KEYS, "arc");
@@ -216,12 +227,18 @@ export function validateTrackerStateDetailed(candidate, options = {}) {
   if (responseKeyError) return fail(responseKeyError);
 
   const normalized = cloneEmptyState();
-  for (const key of SCENE_KEYS.filter((key) => key !== "womanCurrent")) {
+  for (const key of SCENE_KEYS.filter((key) => key !== "womanStable" && key !== "womanCurrent")) {
     const maximumLength = key === "spatial" ? 1_200 : key === "manVisible" ? 1_000 : 700;
     const error = textValidationError(candidate.scene[key], maximumLength, `scene.${key}`);
     if (error) return fail(error);
     const cleaned = cleanText(candidate.scene[key], maximumLength);
     normalized.scene[key] = cleaned;
+  }
+  for (const key of WOMAN_STABLE_KEYS) {
+    const error = textValidationError(candidate.scene.womanStable[key], 1_000, `scene.womanStable.${key}`);
+    if (error) return fail(error);
+    const cleaned = cleanText(candidate.scene.womanStable[key], 1_000);
+    normalized.scene.womanStable[key] = cleaned;
   }
   for (const key of WOMAN_KEYS) {
     const error = textValidationError(candidate.scene.womanCurrent[key], 1_000, `scene.womanCurrent.${key}`);
@@ -306,13 +323,19 @@ export function upgradeTrackerState(candidate, options = {}) {
   if (candidate.schemaVersion === TRACKER_SCHEMA_VERSION) {
     return validateTrackerState(candidate, options);
   }
-  if (candidate.schemaVersion !== 1 || !isPlainObject(candidate.arc)) return null;
+  if (![1, 2].includes(candidate.schemaVersion) || !isPlainObject(candidate.arc)) return null;
   const upgraded = {
     ...candidate,
     schemaVersion: TRACKER_SCHEMA_VERSION,
+    scene: {
+      ...candidate.scene,
+      womanStable: { ...EMPTY_SCENE.womanStable },
+    },
     arc: {
       ...candidate.arc,
-      response: { ...EMPTY_ARC.response },
+      response: candidate.schemaVersion === 1
+        ? { ...EMPTY_ARC.response }
+        : candidate.arc.response,
     },
   };
   return validateTrackerState(upgraded, options);
@@ -355,7 +378,7 @@ export function recoverTrackerStateDetailed(candidate, options = {}) {
   noteExtras(candidate.scene, SCENE_KEYS, "scene");
   noteExtras(candidate.arc, ARC_KEYS, "arc");
 
-  for (const key of SCENE_KEYS.filter((key) => key !== "womanCurrent")) {
+  for (const key of SCENE_KEYS.filter((key) => key !== "womanStable" && key !== "womanCurrent")) {
     const maximumLength = key === "spatial" ? 1_200 : key === "manVisible" ? 1_000 : 700;
     const recovered = recoverText(candidate.scene[key], maximumLength);
     if (recovered === null) {
@@ -366,6 +389,24 @@ export function recoverTrackerStateDetailed(candidate, options = {}) {
       }
       normalized.scene[key] = recovered;
       usableParts += 1;
+    }
+  }
+
+  if (!isPlainObject(candidate.scene.womanStable)) {
+    warnings.push("scene.womanStable was invalid; preserved the previous section");
+  } else {
+    noteExtras(candidate.scene.womanStable, WOMAN_STABLE_KEYS, "scene.womanStable");
+    for (const key of WOMAN_STABLE_KEYS) {
+      const recovered = recoverText(candidate.scene.womanStable[key], 1_000);
+      if (recovered === null) {
+        warnings.push(`scene.womanStable.${key} was invalid; preserved the previous value`);
+      } else {
+        if (String(candidate.scene.womanStable[key]).trim().length > 1_000) {
+          warnings.push(`scene.womanStable.${key} was oversized and was truncated to 1000 characters`);
+        }
+        normalized.scene.womanStable[key] = recovered;
+        usableParts += 1;
+      }
     }
   }
 
@@ -552,6 +593,14 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
         weather: providerStringSchema(),
         location: providerStringSchema(),
         immediateContext: providerStringSchema(),
+        womanStable: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            WOMAN_STABLE_KEYS.map((key) => [key, providerStringSchema()]),
+          ),
+          required: WOMAN_STABLE_KEYS,
+        },
         womanCurrent: {
           type: "object",
           additionalProperties: false,

@@ -22,6 +22,7 @@ test("tracker prompt contains the source id and agency constraints", () => {
   assert.match(prompt, /She waves back/);
   assert.match(trackerTest.systemPrompt, /physicalAttraction/);
   assert.match(trackerTest.systemPrompt, /Consent is action-specific/);
+  assert.match(trackerTest.systemPrompt, /womanStable/);
   assert.match(trackerTest.systemPrompt, /Never use numbers, points, percentages/);
   assert.match(trackerTest.systemPrompt, /"objectives":\[\{"owner":"string","objective":"string","status":"string"\}\]/);
 });
@@ -68,7 +69,7 @@ test("retries one rejected tracker response with the validation reason", async (
       quiet: async (input) => {
         requests.push(input);
         return requests.length === 1
-          ? { content: '{"schemaVersion":2}', finish_reason: "stop" }
+          ? { content: '{"schemaVersion":3}', finish_reason: "stop" }
           : { content: JSON.stringify(state), finish_reason: "stop" };
       },
     },
@@ -89,7 +90,7 @@ test("retries one rejected tracker response with the validation reason", async (
   assert.equal(requests.length, 2);
   assert.match(requests[1].messages.at(-1).content, /scene must be an object/);
   assert.equal(requests[1].messages.at(-2).role, "assistant");
-  assert.equal(requests[1].messages.at(-2).content, '{"schemaVersion":2}');
+  assert.equal(requests[1].messages.at(-2).content, '{"schemaVersion":3}');
 });
 
 test("repairs a structurally empty state instead of treating defaults as an update", async () => {
@@ -102,7 +103,7 @@ test("repairs a structurally empty state instead of treating defaults as an upda
       quiet: async (input) => {
         requests.push(input);
         return requests.length === 1
-          ? { content: '{"schemaVersion":2,"scene":{},"arc":{}}', finish_reason: "stop" }
+          ? { content: '{"schemaVersion":3,"scene":{},"arc":{}}', finish_reason: "stop" }
           : { content: JSON.stringify(state), finish_reason: "stop" };
       },
     },

@@ -673,6 +673,7 @@ export function setup(ctx) {
 
     const scene = publicState.scene;
     const woman = scene.womanCurrent ?? {};
+    const womanStable = scene.womanStable ?? {};
     addGroup("Current scene", [
       ["Date", scene.date],
       ["Time", scene.time],
@@ -683,6 +684,10 @@ export function setup(ctx) {
       ["Spatial", scene.spatial],
     ]);
     addGroup("Woman — observable continuity", [
+      ["Face", womanStable.face],
+      ["Eyes", womanStable.eyes],
+      ["Skin", womanStable.skin],
+      ["Body type & proportions", womanStable.bodyTypeAndProportions],
       ["Hair & grooming", woman.hairAndGrooming],
       ["Dress", woman.dress],
       ["Physical state", woman.physicalState],

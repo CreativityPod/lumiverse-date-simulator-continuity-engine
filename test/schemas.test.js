@@ -29,6 +29,7 @@ test("accepts the documented minimal scene and arc schema", () => {
     state,
   );
   assert.equal(Object.hasOwn(state.scene, "manVisible"), true);
+  assert.equal(Object.hasOwn(state.scene, "womanStable"), true);
 });
 
 test("rejects extra fields, oversized objectives, and forged source ids", () => {
@@ -111,16 +112,30 @@ test("preserves prior private response when source linkage is unsupported", () =
   assert.match(recovered.warnings.join("; "), /response source linkage was invalid/);
 });
 
-test("upgrades schema-v1 checkpoints with conservative unknown response state", () => {
+test("upgrades schema-v1 checkpoints with conservative unknown response and stable appearance", () => {
   const legacy = cloneEmptyState();
   legacy.schemaVersion = 1;
   delete legacy.arc.response;
   legacy.scene.location = "Cafe";
   const upgraded = upgradeTrackerState(legacy);
-  assert.equal(upgraded.schemaVersion, 2);
+  assert.equal(upgraded.schemaVersion, 3);
   assert.equal(upgraded.scene.location, "Cafe");
   assert.equal(upgraded.arc.response.physicalAttraction, "Unknown");
   assert.equal(upgraded.arc.response.sourceMessageId, "");
+  assert.equal(upgraded.scene.womanStable.face, "Unknown");
+});
+
+test("upgrades schema-v2 checkpoints with conservative unknown stable appearance", () => {
+  const legacy = cloneEmptyState();
+  legacy.schemaVersion = 2;
+  delete legacy.scene.womanStable;
+  legacy.scene.location = "Train platform";
+  legacy.arc.response.rapportAndTrust = "Early rapport established.";
+  const upgraded = upgradeTrackerState(legacy);
+  assert.equal(upgraded.schemaVersion, 3);
+  assert.equal(upgraded.scene.location, "Train platform");
+  assert.equal(upgraded.scene.womanStable.eyes, "Unknown");
+  assert.equal(upgraded.arc.response.rapportAndTrust, "Early rapport established.");
 });
 
 test("enforces the nonsexual private-response value in Teen Mode", () => {
