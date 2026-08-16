@@ -159,10 +159,24 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.match(variables.get("chat-1:date_simulator.case"), /DS-V14-BACKEND/);
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).date, "Unknown");
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.arc_v2")).response.physicalAttraction, "Unknown");
-  assert.equal(files.get("chats/chat-1.json").revision, 1);
+  const firstRevisionStore = files.get("chats/chat-1.json");
+  const firstCheckpoint = Object.values(firstRevisionStore.checkpoints)[0];
+  assert.equal(firstRevisionStore.revision, 1);
+  assert.ok(firstRevisionStore.lastRevisionAt);
+  assert.equal(firstRevisionStore.lastRevisionAt, firstCheckpoint.createdAt);
   assert.ok(frontendMessages.some((payload) => payload.level === "green"));
   assert.ok(generatedUsers.length > 0);
   assert.ok(generatedUsers.every((userId) => userId === "user-1"));
+
+  // A page reload/status request schedules a verification pass. Drain that pass
+  // through the per-chat queue and confirm it did not create a revision.
+  await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
+  await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: opening }, "user-1");
+  assert.equal(files.get("chats/chat-1.json").revision, 1);
+  assert.equal(files.get("chats/chat-1.json").lastRevisionAt, firstRevisionStore.lastRevisionAt);
+  assert.ok(frontendMessages.some(
+    (payload) => payload.revision === 1 && payload.lastRevisionAt === firstRevisionStore.lastRevisionAt,
+  ));
 
   await frontendHandler({
     type: "continuity_reprocess",
@@ -252,6 +266,7 @@ test("saves the private profile before tracker completion and blocks the next pr
   assert.equal(variables.get("chat-barrier:date_simulator.phase"), "active");
   assert.match(variables.get("chat-barrier:date_simulator.case"), /DS-V14-BACKEND/);
   assert.equal(files.get("chats/chat-barrier.json").revision, 0);
+  assert.equal(files.get("chats/chat-barrier.json").lastRevisionAt, "");
 
   const nextPrompt = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
@@ -271,6 +286,7 @@ test("saves the private profile before tracker completion and blocks the next pr
   const result = await intercepted;
   assert.equal(promptFinished, true);
   assert.equal(files.get("chats/chat-barrier.json").revision, 1);
+  assert.ok(files.get("chats/chat-barrier.json").lastRevisionAt);
   assert.match(result.messages.map((message) => String(message.content)).join("\n"), /CURRENT SCENE/);
 
   delete globalThis.spindle;

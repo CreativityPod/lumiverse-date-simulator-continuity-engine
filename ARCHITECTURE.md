@@ -10,7 +10,7 @@ The extension is split into five small modules:
 
 ## Persistence
 
-Each chat has one extension-owned JSON store under `chats/`. It contains the active epoch, current state, per-turn checkpoints, migration baseline, revision, and diagnostic status. Chat IDs are reduced to safe storage tokens. The backend mirrors scene v2, full arc v2, and a response-free arc v1 compatibility view to private chat variables, but extension storage is canonical.
+Each chat has one extension-owned JSON store under `chats/`. It contains the active epoch, current state, per-turn checkpoints, migration baseline, revision, last revision time, and diagnostic status. Revision number and `lastRevisionAt` are committed together only when a tracker or migration checkpoint is created; verification-only reconciliation never changes them. Chat IDs are reduced to safe storage tokens. The backend mirrors scene v2, full arc v2, and a response-free arc v1 compatibility view to private chat variables, but extension storage is canonical.
 
 Store and tracker schema v1 are upgraded locally to schema v2 by preserving every validated scene, NPC, relationship, and objective value and initializing the new response fields conservatively as unknown. Stored transcript messages are never rewritten, so the state can be rebuilt from the selected branch if an extension rollback discards the newer sidecar store.
 

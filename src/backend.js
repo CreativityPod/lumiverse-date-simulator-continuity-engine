@@ -261,7 +261,7 @@ async function statusPayload(chatId, options = {}) {
     lastError: store.lastError || "",
     lastWarning: store.lastWarning || "",
     revision: store.revision || 0,
-    updatedAt: store.lastUpdatedAt || "",
+    lastRevisionAt: store.lastRevisionAt || "",
     publicState: publicTrackerSnapshot(store.current),
   };
   if (payload.migrationRequired) {
@@ -320,6 +320,11 @@ function resetForEpoch(store, context) {
   return next;
 }
 
+function recordRevision(store, timestamp = new Date().toISOString()) {
+  store.revision += 1;
+  store.lastRevisionAt = timestamp;
+}
+
 async function performMigration(chatId, messages, context, store, config, userId) {
   const turns = listEligibleTurns(messages, context);
   const latest = turns.at(-1);
@@ -338,11 +343,12 @@ async function performMigration(chatId, messages, context, store, config, userId
   if (!(await selectedBranchStillMatches(chatId, latest))) {
     throw new Error("The selected branch changed during migration.");
   }
+  const createdAt = new Date().toISOString();
   store.checkpoints[latest.key] = {
     fingerprint: latest.fingerprint,
     state: result.state,
     warnings: result.warnings,
-    createdAt: new Date().toISOString(),
+    createdAt,
     migrated: true,
   };
   store.current = result.state;
@@ -351,7 +357,7 @@ async function performMigration(chatId, messages, context, store, config, userId
   store.migrationRequired = false;
   store.migrationBaselineKey = latest.key;
   store.migrationBaselineFingerprint = latest.fingerprint;
-  store.revision += 1;
+  recordRevision(store, createdAt);
   return store;
 }
 
@@ -492,15 +498,16 @@ async function reconcileChat(chatId, options = {}, userId) {
         if (!(await selectedBranchStillMatches(chatId, turn))) {
           throw new Error("The selected branch changed while tracking.");
         }
+        const createdAt = new Date().toISOString();
         store.checkpoints[turn.key] = {
           fingerprint: turn.fingerprint,
           state: result.state,
           warnings: result.warnings,
-          createdAt: new Date().toISOString(),
+          createdAt,
         };
         previousState = result.state;
         store.lastWarning = result.warnings.join("; ").slice(0, 500);
-        store.revision += 1;
+        recordRevision(store, createdAt);
       }
 
       const liveKeys = new Set(turns.map((turn) => turn.key));
@@ -510,7 +517,6 @@ async function reconcileChat(chatId, options = {}, userId) {
       store.current = previousState;
     }
     store.lastError = "";
-    store.lastUpdatedAt = new Date().toISOString();
   } catch (error) {
     store.lastError = String(error?.message ?? error).slice(0, 500);
     spindle.log.warn(`Date Simulator continuity update failed for ${chatId}: ${store.lastError}`);

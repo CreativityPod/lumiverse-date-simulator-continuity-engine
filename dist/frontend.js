@@ -846,11 +846,11 @@ export function setup(ctx) {
     latestStatus = status;
     if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
     statusText.textContent = status.text;
-    const localUpdatedAt = formatLocalTimestamp(status.updatedAt);
+    const localRevisionAt = formatLocalTimestamp(status.lastRevisionAt);
     statusMeta.textContent = status.chatId
-      ? `Revision ${status.revision || 0}${localUpdatedAt ? ` · ${localUpdatedAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
+      ? `Revision ${status.revision || 0}${localRevisionAt ? ` · Last revised ${localRevisionAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
       : "No active chat.";
-    statusMeta.title = status.updatedAt || "";
+    statusMeta.title = status.lastRevisionAt || "";
     const badgeText = status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
     const badgeColor = status.processing ? "info" : status.level === "green" ? "success" : "warning";
     badgeControl.update({ text: badgeText, color: badgeColor });

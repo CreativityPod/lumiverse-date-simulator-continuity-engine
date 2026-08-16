@@ -423,7 +423,7 @@ export function createStore(chatId) {
     processing: false,
     lastError: "",
     lastWarning: "",
-    lastUpdatedAt: "",
+    lastRevisionAt: "",
   };
 }
 
