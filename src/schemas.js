@@ -1,4 +1,4 @@
-export const TRACKER_SCHEMA_VERSION = 1;
+export const TRACKER_SCHEMA_VERSION = 3;
 
 export const EMPTY_SCENE = Object.freeze({
   date: "Unknown",
@@ -6,6 +6,12 @@ export const EMPTY_SCENE = Object.freeze({
   weather: "Unknown",
   location: "Unknown",
   immediateContext: "Unknown",
+  womanStable: Object.freeze({
+    face: "Unknown",
+    eyes: "Unknown",
+    skin: "Unknown",
+    bodyTypeAndProportions: "Unknown",
+  }),
   womanCurrent: Object.freeze({
     hairAndGrooming: "Unknown",
     dress: "Unknown",
@@ -25,6 +31,21 @@ export const EMPTY_ARC = Object.freeze({
     latestChange: "",
     sourceMessageId: "",
   }),
+  response: Object.freeze({
+    availableAttention: "Unknown",
+    comfortAndSafety: "Unknown",
+    rapportAndTrust: "Unknown",
+    physicalAttraction: "Unknown",
+    personalInterest: "Unknown",
+    romanticInterest: "Unknown",
+    sexualInterest: "Unknown or not applicable",
+    willingnessToContinue: "Unknown",
+    contactExchangeInterest: "Unknown",
+    desireToLeave: "Unknown",
+    activeUncertainty: "None established.",
+    latestChange: "",
+    sourceMessageId: "",
+  }),
   objectives: Object.freeze([]),
 });
 
@@ -35,17 +56,34 @@ const SCENE_KEYS = [
   "weather",
   "location",
   "immediateContext",
+  "womanStable",
   "womanCurrent",
   "manVisible",
   "spatial",
 ];
+const WOMAN_STABLE_KEYS = ["face", "eyes", "skin", "bodyTypeAndProportions"];
 const WOMAN_KEYS = ["hairAndGrooming", "dress", "physicalState", "mentalState"];
-const ARC_KEYS = ["npcs", "relationship", "objectives"];
+const ARC_KEYS = ["npcs", "relationship", "response", "objectives"];
 const NPC_KEYS = ["name", "role", "relationship", "currentStatus", "immediateObjective"];
 const RELATIONSHIP_KEYS = [
   "establishedStatus",
   "womanPosture",
   "activeBoundaryOrConcern",
+  "latestChange",
+  "sourceMessageId",
+];
+const RESPONSE_KEYS = [
+  "availableAttention",
+  "comfortAndSafety",
+  "rapportAndTrust",
+  "physicalAttraction",
+  "personalInterest",
+  "romanticInterest",
+  "sexualInterest",
+  "willingnessToContinue",
+  "contactExchangeInterest",
+  "desireToLeave",
+  "activeUncertainty",
   "latestChange",
   "sourceMessageId",
 ];
@@ -148,11 +186,13 @@ export function cloneEmptyState() {
     schemaVersion: TRACKER_SCHEMA_VERSION,
     scene: {
       ...EMPTY_SCENE,
+      womanStable: { ...EMPTY_SCENE.womanStable },
       womanCurrent: { ...EMPTY_SCENE.womanCurrent },
     },
     arc: {
       npcs: [],
       relationship: { ...EMPTY_ARC.relationship },
+      response: { ...EMPTY_ARC.response },
       objectives: [],
     },
   };
@@ -175,20 +215,30 @@ export function validateTrackerStateDetailed(candidate, options = {}) {
   }
   const sceneKeyError = keyValidationError(candidate.scene, SCENE_KEYS, "scene");
   if (sceneKeyError) return fail(sceneKeyError);
+  const womanStableKeyError = keyValidationError(candidate.scene.womanStable, WOMAN_STABLE_KEYS, "scene.womanStable");
+  if (womanStableKeyError) return fail(womanStableKeyError);
   const womanKeyError = keyValidationError(candidate.scene.womanCurrent, WOMAN_KEYS, "scene.womanCurrent");
   if (womanKeyError) return fail(womanKeyError);
   const arcKeyError = keyValidationError(candidate.arc, ARC_KEYS, "arc");
   if (arcKeyError) return fail(arcKeyError);
   const relationshipKeyError = keyValidationError(candidate.arc.relationship, RELATIONSHIP_KEYS, "arc.relationship");
   if (relationshipKeyError) return fail(relationshipKeyError);
+  const responseKeyError = keyValidationError(candidate.arc.response, RESPONSE_KEYS, "arc.response");
+  if (responseKeyError) return fail(responseKeyError);
 
   const normalized = cloneEmptyState();
-  for (const key of SCENE_KEYS.filter((key) => key !== "womanCurrent")) {
+  for (const key of SCENE_KEYS.filter((key) => key !== "womanStable" && key !== "womanCurrent")) {
     const maximumLength = key === "spatial" ? 1_200 : key === "manVisible" ? 1_000 : 700;
     const error = textValidationError(candidate.scene[key], maximumLength, `scene.${key}`);
     if (error) return fail(error);
     const cleaned = cleanText(candidate.scene[key], maximumLength);
     normalized.scene[key] = cleaned;
+  }
+  for (const key of WOMAN_STABLE_KEYS) {
+    const error = textValidationError(candidate.scene.womanStable[key], 1_000, `scene.womanStable.${key}`);
+    if (error) return fail(error);
+    const cleaned = cleanText(candidate.scene.womanStable[key], 1_000);
+    normalized.scene.womanStable[key] = cleaned;
   }
   for (const key of WOMAN_KEYS) {
     const error = textValidationError(candidate.scene.womanCurrent[key], 1_000, `scene.womanCurrent.${key}`);
@@ -223,6 +273,32 @@ export function validateTrackerStateDetailed(candidate, options = {}) {
     return fail("arc.relationship.sourceMessageId must be empty when latestChange is empty");
   }
 
+  for (const key of RESPONSE_KEYS) {
+    const allowEmpty = key === "latestChange" || key === "sourceMessageId";
+    const error = textValidationError(candidate.arc.response[key], 700, `arc.response.${key}`, { allowEmpty });
+    if (error) return fail(error);
+    const cleaned = cleanText(candidate.arc.response[key], 700, { allowEmpty });
+    normalized.arc.response[key] = cleaned;
+  }
+  if (
+    options.teenMode &&
+    normalized.arc.response.sexualInterest !== "Not applicable in Teen Mode."
+  ) {
+    return fail("arc.response.sexualInterest must be Not applicable in Teen Mode.");
+  }
+  const responseLatestChange = normalized.arc.response.latestChange;
+  const responseSourceMessageId = normalized.arc.response.sourceMessageId;
+  if (
+    responseLatestChange &&
+    allowedSourceMessageIds.size > 0 &&
+    !allowedSourceMessageIds.has(responseSourceMessageId)
+  ) {
+    return fail("arc.response.sourceMessageId does not match the current or prior change source");
+  }
+  if (!responseLatestChange && responseSourceMessageId) {
+    return fail("arc.response.sourceMessageId must be empty when latestChange is empty");
+  }
+
   if (!Array.isArray(candidate.arc.objectives) || candidate.arc.objectives.length > 3) {
     return fail("arc.objectives must be an array containing at most 3 entries");
   }
@@ -242,14 +318,41 @@ export function validateTrackerState(candidate, options = {}) {
   return validateTrackerStateDetailed(candidate, options).state;
 }
 
+export function upgradeTrackerState(candidate, options = {}) {
+  if (!isPlainObject(candidate)) return null;
+  if (candidate.schemaVersion === TRACKER_SCHEMA_VERSION) {
+    return validateTrackerState(candidate, options);
+  }
+  if (![1, 2].includes(candidate.schemaVersion) || !isPlainObject(candidate.arc)) return null;
+  const upgraded = {
+    ...candidate,
+    schemaVersion: TRACKER_SCHEMA_VERSION,
+    scene: {
+      ...candidate.scene,
+      womanStable: { ...EMPTY_SCENE.womanStable },
+    },
+    arc: {
+      ...candidate.arc,
+      response: candidate.schemaVersion === 1
+        ? { ...EMPTY_ARC.response }
+        : candidate.arc.response,
+    },
+  };
+  return validateTrackerState(upgraded, options);
+}
+
 function extraKeys(value, keys) {
   return isPlainObject(value) ? Object.keys(value).filter((key) => !keys.includes(key)) : [];
 }
 
 function previousOrEmpty(previousState) {
   if (!previousState) return cloneEmptyState();
-  return validateTrackerState(previousState, {
+  return upgradeTrackerState(previousState, {
     sourceMessageId: previousState.arc?.relationship?.sourceMessageId || undefined,
+    allowedSourceMessageIds: [
+      previousState.arc?.relationship?.sourceMessageId,
+      previousState.arc?.response?.sourceMessageId,
+    ].filter(Boolean),
   }) ?? cloneEmptyState();
 }
 
@@ -275,7 +378,7 @@ export function recoverTrackerStateDetailed(candidate, options = {}) {
   noteExtras(candidate.scene, SCENE_KEYS, "scene");
   noteExtras(candidate.arc, ARC_KEYS, "arc");
 
-  for (const key of SCENE_KEYS.filter((key) => key !== "womanCurrent")) {
+  for (const key of SCENE_KEYS.filter((key) => key !== "womanStable" && key !== "womanCurrent")) {
     const maximumLength = key === "spatial" ? 1_200 : key === "manVisible" ? 1_000 : 700;
     const recovered = recoverText(candidate.scene[key], maximumLength);
     if (recovered === null) {
@@ -286,6 +389,24 @@ export function recoverTrackerStateDetailed(candidate, options = {}) {
       }
       normalized.scene[key] = recovered;
       usableParts += 1;
+    }
+  }
+
+  if (!isPlainObject(candidate.scene.womanStable)) {
+    warnings.push("scene.womanStable was invalid; preserved the previous section");
+  } else {
+    noteExtras(candidate.scene.womanStable, WOMAN_STABLE_KEYS, "scene.womanStable");
+    for (const key of WOMAN_STABLE_KEYS) {
+      const recovered = recoverText(candidate.scene.womanStable[key], 1_000);
+      if (recovered === null) {
+        warnings.push(`scene.womanStable.${key} was invalid; preserved the previous value`);
+      } else {
+        if (String(candidate.scene.womanStable[key]).trim().length > 1_000) {
+          warnings.push(`scene.womanStable.${key} was oversized and was truncated to 1000 characters`);
+        }
+        normalized.scene.womanStable[key] = recovered;
+        usableParts += 1;
+      }
     }
   }
 
@@ -377,6 +498,42 @@ export function recoverTrackerStateDetailed(candidate, options = {}) {
     }
   }
 
+  if (!isPlainObject(candidate.arc.response)) {
+    warnings.push("arc.response was invalid; preserved the previous response state");
+  } else {
+    noteExtras(candidate.arc.response, RESPONSE_KEYS, "arc.response");
+    const recoveredResponse = { ...normalized.arc.response };
+    for (const key of RESPONSE_KEYS) {
+      const allowEmpty = key === "latestChange" || key === "sourceMessageId";
+      const recovered = recoverText(candidate.arc.response[key], 700, { allowEmpty });
+      if (recovered === null) {
+        warnings.push(`arc.response.${key} was invalid; preserved the previous value`);
+      } else {
+        if (String(candidate.arc.response[key]).trim().length > 700) {
+          warnings.push(`arc.response.${key} was oversized and was truncated to 700 characters`);
+        }
+        recoveredResponse[key] = recovered;
+      }
+    }
+    if (options.teenMode && recoveredResponse.sexualInterest !== "Not applicable in Teen Mode.") {
+      recoveredResponse.sexualInterest = "Not applicable in Teen Mode.";
+      warnings.push("arc.response.sexualInterest was replaced with the Teen Mode nonsexual value");
+    }
+    const allowedSourceMessageIds = new Set(
+      (options.allowedSourceMessageIds ?? []).map((value) => String(value ?? "")).filter(Boolean),
+    );
+    if (options.sourceMessageId) allowedSourceMessageIds.add(String(options.sourceMessageId));
+    const invalidSource = recoveredResponse.latestChange
+      ? allowedSourceMessageIds.size > 0 && !allowedSourceMessageIds.has(recoveredResponse.sourceMessageId)
+      : Boolean(recoveredResponse.sourceMessageId);
+    if (invalidSource) {
+      warnings.push("arc.response source linkage was invalid; preserved the previous response state");
+    } else {
+      normalized.arc.response = recoveredResponse;
+      usableParts += 1;
+    }
+  }
+
   if (!Array.isArray(candidate.arc.objectives)) {
     warnings.push("arc.objectives was invalid; preserved the previous objectives");
   } else {
@@ -436,6 +593,14 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
         weather: providerStringSchema(),
         location: providerStringSchema(),
         immediateContext: providerStringSchema(),
+        womanStable: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            WOMAN_STABLE_KEYS.map((key) => [key, providerStringSchema()]),
+          ),
+          required: WOMAN_STABLE_KEYS,
+        },
         womanCurrent: {
           type: "object",
           additionalProperties: false,
@@ -478,6 +643,17 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
             ]),
           ),
           required: RELATIONSHIP_KEYS,
+        },
+        response: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            RESPONSE_KEYS.map((key) => [
+              key,
+              providerStringSchema(),
+            ]),
+          ),
+          required: RESPONSE_KEYS,
         },
         objectives: {
           type: "array",

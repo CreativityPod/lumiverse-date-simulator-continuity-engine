@@ -1,6 +1,10 @@
 import {
+  TRACKER_SCHEMA_VERSION,
+} from "./schemas.js";
+import {
   CHAT_KEYS,
   INACTIVE_CASE,
+  buildSurpriseMeSample,
   compactPromptMessages,
   createStore,
   deriveTranscriptContext,
@@ -132,12 +136,24 @@ async function setVariableIfChanged(chatId, key, value) {
 
 async function mirrorStore(chatId, store, context) {
   const current = store.current;
+  const legacyArc = current
+    ? {
+      npcs: current.arc?.npcs ?? [],
+      relationship: current.arc?.relationship ?? {},
+      objectives: current.arc?.objectives ?? [],
+    }
+    : null;
   await Promise.all([
     setVariableIfChanged(chatId, CHAT_KEYS.case, context.active ? context.caseText : INACTIVE_CASE),
     setVariableIfChanged(chatId, CHAT_KEYS.phase, context.active ? "active" : "setup"),
-    setVariableIfChanged(chatId, CHAT_KEYS.trackerVersion, context.active ? "1" : ""),
+    setVariableIfChanged(
+      chatId,
+      CHAT_KEYS.trackerVersion,
+      context.active ? String(TRACKER_SCHEMA_VERSION) : "",
+    ),
     setVariableIfChanged(chatId, CHAT_KEYS.scene, current ? JSON.stringify(current.scene) : ""),
     setVariableIfChanged(chatId, CHAT_KEYS.arc, current ? JSON.stringify(current.arc) : ""),
+    setVariableIfChanged(chatId, CHAT_KEYS.legacyArc, legacyArc ? JSON.stringify(legacyArc) : ""),
     setVariableIfChanged(chatId, CHAT_KEYS.revision, String(store.revision ?? 0)),
   ]);
 }
@@ -159,7 +175,7 @@ function readiness(config) {
   return {
     level: "green",
     code: "ready",
-    text: "Continuity Engine ready. Open a Date Simulator v1.4 chat to begin tracking.",
+    text: "Continuity Engine ready. Open a Date Simulator v1.4.x or v1.5.x chat to begin tracking.",
   };
 }
 
@@ -177,6 +193,9 @@ export function publicTrackerSnapshot(state) {
   const woman = scene.womanCurrent && typeof scene.womanCurrent === "object"
     ? scene.womanCurrent
     : {};
+  const womanStable = scene.womanStable && typeof scene.womanStable === "object"
+    ? scene.womanStable
+    : {};
   const arc = state.arc && typeof state.arc === "object" ? state.arc : {};
   const relationship = arc.relationship && typeof arc.relationship === "object"
     ? arc.relationship
@@ -192,6 +211,12 @@ export function publicTrackerSnapshot(state) {
       weather: text(scene.weather),
       location: text(scene.location),
       immediateContext: text(scene.immediateContext),
+      womanStable: {
+        face: text(womanStable.face),
+        eyes: text(womanStable.eyes),
+        skin: text(womanStable.skin),
+        bodyTypeAndProportions: text(womanStable.bodyTypeAndProportions),
+      },
       womanCurrent: {
         hairAndGrooming: text(woman.hairAndGrooming),
         dress: text(woman.dress),
@@ -252,7 +277,7 @@ async function statusPayload(chatId, options = {}) {
     lastError: store.lastError || "",
     lastWarning: store.lastWarning || "",
     revision: store.revision || 0,
-    updatedAt: store.lastUpdatedAt || "",
+    lastRevisionAt: store.lastRevisionAt || "",
     publicState: publicTrackerSnapshot(store.current),
   };
   if (payload.migrationRequired) {
@@ -285,7 +310,7 @@ async function statusPayload(chatId, options = {}) {
     payload.text = "Continuity Engine active. Private profile saved; scene and arc tracking are automatic.";
   } else if (base.level === "green") {
     payload.code = "ready_no_profile";
-    payload.text = "Continuity Engine ready. No Date Simulator v1.4 private profile was found in this chat yet.";
+    payload.text = "Continuity Engine ready. No Date Simulator v1.4.x or v1.5.x private profile was found in this chat yet.";
   }
   if (options.includePrivate) payload.state = store.current;
   return payload;
@@ -311,6 +336,11 @@ function resetForEpoch(store, context) {
   return next;
 }
 
+function recordRevision(store, timestamp = new Date().toISOString()) {
+  store.revision += 1;
+  store.lastRevisionAt = timestamp;
+}
+
 async function performMigration(chatId, messages, context, store, config, userId) {
   const turns = listEligibleTurns(messages, context);
   const latest = turns.at(-1);
@@ -329,11 +359,12 @@ async function performMigration(chatId, messages, context, store, config, userId
   if (!(await selectedBranchStillMatches(chatId, latest))) {
     throw new Error("The selected branch changed during migration.");
   }
+  const createdAt = new Date().toISOString();
   store.checkpoints[latest.key] = {
     fingerprint: latest.fingerprint,
     state: result.state,
     warnings: result.warnings,
-    createdAt: new Date().toISOString(),
+    createdAt,
     migrated: true,
   };
   store.current = result.state;
@@ -342,7 +373,7 @@ async function performMigration(chatId, messages, context, store, config, userId
   store.migrationRequired = false;
   store.migrationBaselineKey = latest.key;
   store.migrationBaselineFingerprint = latest.fingerprint;
-  store.revision += 1;
+  recordRevision(store, createdAt);
   return store;
 }
 
@@ -375,8 +406,8 @@ async function reconcileChat(chatId, options = {}, userId) {
   await mirrorStore(chatId, store, context);
   await publishStatus(chatId, {}, scopedUserId);
 
-  const nativeV14 = /\b(?:Date Simulator\s+)?v1\.4(?:\.\d+)?\b/i.test(context.caseText);
-  if (!nativeV14 && !store.migrationAccepted && !options.allowMigration) {
+  const nativeCurrent = /\b(?:Date Simulator\s+)?v1\.(?:4(?:\.\d+)?|5)\b/i.test(context.caseText);
+  if (!nativeCurrent && !store.migrationAccepted && !options.allowMigration) {
     store.migrationRequired = true;
     store.processing = false;
     await saveStore(chatId, store);
@@ -385,7 +416,7 @@ async function reconcileChat(chatId, options = {}, userId) {
     return;
   }
 
-  if (!nativeV14 && store.migrationAccepted && store.migrationBaselineKey) {
+  if (!nativeCurrent && store.migrationAccepted && store.migrationBaselineKey) {
     const turns = listEligibleTurns(messages, context);
     const baselineIndex = turns.findIndex(
       (turn) =>
@@ -429,7 +460,7 @@ async function reconcileChat(chatId, options = {}, userId) {
   await publishStatus(chatId, {}, scopedUserId);
 
   try {
-    if (options.allowMigration && !nativeV14 && !store.migrationAccepted) {
+    if (options.allowMigration && !nativeCurrent && !store.migrationAccepted) {
       store = await performMigration(chatId, messages, context, store, config, scopedUserId);
     } else {
       const turns = listEligibleTurns(messages, context);
@@ -483,15 +514,16 @@ async function reconcileChat(chatId, options = {}, userId) {
         if (!(await selectedBranchStillMatches(chatId, turn))) {
           throw new Error("The selected branch changed while tracking.");
         }
+        const createdAt = new Date().toISOString();
         store.checkpoints[turn.key] = {
           fingerprint: turn.fingerprint,
           state: result.state,
           warnings: result.warnings,
-          createdAt: new Date().toISOString(),
+          createdAt,
         };
         previousState = result.state;
         store.lastWarning = result.warnings.join("; ").slice(0, 500);
-        store.revision += 1;
+        recordRevision(store, createdAt);
       }
 
       const liveKeys = new Set(turns.map((turn) => turn.key));
@@ -501,7 +533,6 @@ async function reconcileChat(chatId, options = {}, userId) {
       store.current = previousState;
     }
     store.lastError = "";
-    store.lastUpdatedAt = new Date().toISOString();
   } catch (error) {
     store.lastError = String(error?.message ?? error).slice(0, 500);
     spindle.log.warn(`Date Simulator continuity update failed for ${chatId}: ${store.lastError}`);
@@ -561,8 +592,19 @@ async function interceptPrompt(messages, context) {
   }
 
   // Setup turns need the card's worked case examples and gain nothing from an
-  // empty tracker block. Begin compaction only after a live profile is saved.
-  if (!caseText) return messages;
+  // empty tracker block. A Surprise Me turn may receive one deterministic,
+  // prompt-only casting draw; begin continuity compaction only after a live
+  // profile is saved.
+  if (!caseText) {
+    const sample = buildSurpriseMeSample(messages, chatId);
+    if (!sample) return messages;
+    const sampledMessages = [...sample.messages];
+    sampledMessages.splice(sample.insertionIndex, 0, sample.message);
+    return {
+      messages: sampledMessages,
+      breakdown: [{ messageIndex: sample.insertionIndex, name: "Date Simulator Case Sampler" }],
+    };
+  }
 
   const compacted = compactPromptMessages(messages, caseText, state, status);
   return {

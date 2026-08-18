@@ -3,10 +3,13 @@ import test from "node:test";
 
 import {
   buildCanonicalState,
+  buildSurpriseMeSample,
   checkpointKey,
   compactPromptMessages,
   deriveTranscriptContext,
+  isV14Prompt,
   listEligibleTurns,
+  normalizeStore,
   prefixFingerprint,
   stripManagedText,
   validateCaseCapsuleDetailed,
@@ -33,7 +36,7 @@ SPATIAL: Opposite seats.`;
 const caseEnvelope = `<!--DATE_SIM_CASE\n${CASE}\nEND_DATE_SIM_CASE-->`;
 const sceneEnvelope = `<!--DATE_SIM_SCENE\n${LEGACY_SCENE}\nEND_DATE_SIM_SCENE-->`;
 
-test("derives a v1.4 case, legacy migration signal, and reset epoch", () => {
+test("derives a current case, legacy migration signal, and reset epoch", () => {
   const active = deriveTranscriptContext([
     { id: "a1", role: "assistant", content: `${caseEnvelope}\n${sceneEnvelope}` },
   ]);
@@ -94,6 +97,68 @@ test("compacts private markers and injects exactly one canonical block", () => {
   assert.equal(compacted.messages[1].content, "Visible.");
   assert.equal(compacted.messages[2].role, "system");
   assert.match(compacted.messages[2].content, /CURRENT SCENE/);
+  assert.match(compacted.messages[2].content, /"response"/);
+  assert.match(compacted.messages[2].content, /schema_version="3"/);
   assert.match(buildCanonicalState(CASE, cloneEmptyState()), /status="active"/);
   assert.equal(stripManagedText(caseEnvelope), "");
+});
+
+test("recognizes v1.5 patch prompts without promoting prompt-only examples", () => {
+  const messages = [
+    { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
+    { role: "assistant", content: `Example only.\n${caseEnvelope}` },
+  ];
+  assert.equal(isV14Prompt(messages), true);
+  const context = deriveTranscriptContext([]);
+  assert.equal(context.active, false);
+  const compacted = compactPromptMessages(messages, CASE, cloneEmptyState());
+  assert.match(compacted.messages.map((message) => String(message.content)).join("\n"), /schema_version="3"/);
+});
+
+test("normalizes schema-v1 stores and checkpoints to tracker schema v3", () => {
+  const legacyState = cloneEmptyState();
+  legacyState.schemaVersion = 1;
+  delete legacyState.arc.response;
+  legacyState.scene.location = "Legacy cafe";
+  const store = normalizeStore({
+    schemaVersion: 1,
+    chatId: "old",
+    current: legacyState,
+    checkpoints: {
+      "a1::0": { fingerprint: "abcd", state: legacyState },
+    },
+  }, "chat-current");
+  assert.equal(store.schemaVersion, 2);
+  assert.equal(store.chatId, "chat-current");
+  assert.equal(store.current.schemaVersion, 3);
+  assert.equal(store.current.scene.location, "Legacy cafe");
+  assert.equal(store.checkpoints["a1::0"].state.arc.response.rapportAndTrust, "Unknown");
+  assert.equal(store.checkpoints["a1::0"].state.scene.womanStable.face, "Unknown");
+});
+
+test("builds one deterministic prompt-only Surprise Me casting draw", () => {
+  const messages = [
+    { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
+    { id: "u1", role: "user", content: "Surprise Me" },
+  ];
+  const first = buildSurpriseMeSample(messages, "chat-sample");
+  assert.ok(first);
+  assert.match(first.message.content, /relationshipSituation:/);
+  assert.match(first.message.content, /preferenceAlignment:/);
+  assert.match(first.message.content, /Do not preselect attraction, success, rejection/);
+  assert.doesNotMatch(first.message.content, /culturalBackground:/);
+
+  const withPriorSampler = [...messages];
+  withPriorSampler.splice(first.insertionIndex, 0, first.message);
+  const second = buildSurpriseMeSample(withPriorSampler, "chat-sample");
+  assert.equal(second.seed, first.seed);
+  assert.equal(second.message.content, first.message.content);
+  assert.equal(buildSurpriseMeSample([
+    { role: "system", content: "<date_simulator_version>1.5</date_simulator_version>" },
+    { role: "user", content: "Quick Setup" },
+  ], "chat-sample"), null);
+  assert.equal(buildSurpriseMeSample([
+    { role: "system", content: "<date_simulator_version>1.4.1</date_simulator_version>" },
+    { role: "user", content: "Surprise Me" },
+  ], "chat-sample"), null);
 });

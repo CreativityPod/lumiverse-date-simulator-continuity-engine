@@ -53,6 +53,41 @@ export function profileCardPresentation(status) {
   };
 }
 
+export function formatLocalTimestamp(value, locales, options = {}) {
+  if (typeof value !== "string" || !value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat(locales, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      ...options,
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+export function privateStatePresentation(visible, status, cached = null) {
+  if (!visible) {
+    return { text: "Private state is hidden.", cache: null };
+  }
+  if (!status?.chatId) {
+    return { text: "No active chat.", cache: null };
+  }
+
+  let nextCache = cached?.chatId === status.chatId ? cached : null;
+  if (Object.prototype.hasOwnProperty.call(status, "state")) {
+    nextCache = { chatId: status.chatId, state: status.state };
+  }
+  return {
+    text: nextCache
+      ? JSON.stringify(nextCache.state, null, 2)
+      : "Loading private state…",
+    cache: nextCache,
+  };
+}
+
 function createButton(text, action, primary = false) {
   const button = document.createElement("button");
   button.type = "button";
@@ -104,18 +139,45 @@ function supportsNativeComponents(ctx) {
   return names.every((name) => typeof ctx.components?.[name] === "function");
 }
 
-function cardsInside(root) {
-  if (!(root instanceof Element)) return [];
+function isElementLike(value) {
+  return Boolean(
+    value
+    && value.nodeType === 1
+    && typeof value.matches === "function"
+    && typeof value.querySelectorAll === "function",
+  );
+}
+
+export function cardsInside(root) {
   const cards = [];
-  if (root.matches(PROFILE_CARD_SELECTOR) || root.querySelector(PROFILE_BUTTON_SELECTOR)) {
-    const card = root.matches(".ds-state-card") ? root : root.closest(".ds-state-card");
-    if (card) cards.push(card);
+  const visited = new Set();
+
+  function visit(scope) {
+    if (!scope || visited.has(scope) || typeof scope.querySelectorAll !== "function") return;
+    visited.add(scope);
+
+    if (isElementLike(scope)) {
+      if (scope.matches(PROFILE_CARD_SELECTOR)) cards.push(scope);
+      if (scope.matches(PROFILE_BUTTON_SELECTOR)) {
+        const card = scope.closest?.(".ds-state-card");
+        if (card) cards.push(card);
+      }
+      if (scope.matches(".ds-state-card") && scope.querySelector(PROFILE_BUTTON_SELECTOR)) {
+        cards.push(scope);
+      }
+    }
+
+    cards.push(...scope.querySelectorAll(PROFILE_CARD_SELECTOR));
+    for (const button of scope.querySelectorAll(PROFILE_BUTTON_SELECTOR)) {
+      const card = button.closest?.(".ds-state-card");
+      if (card) cards.push(card);
+    }
+    for (const element of scope.querySelectorAll("*")) {
+      if (element.shadowRoot) visit(element.shadowRoot);
+    }
   }
-  cards.push(...root.querySelectorAll(PROFILE_CARD_SELECTOR));
-  for (const button of root.querySelectorAll(PROFILE_BUTTON_SELECTOR)) {
-    const card = button.closest(".ds-state-card");
-    if (card) cards.push(card);
-  }
+
+  visit(root);
   return [...new Set(cards)];
 }
 
@@ -128,6 +190,8 @@ export function setup(ctx) {
   let activeChatId = null;
   let connectionDiagnostic = "Loading connection profiles…";
   let connectionPermissionGranted = null;
+  let showPrivateState = false;
+  let privateStateCache = null;
   let cardSyncQueued = false;
   const cardWatchdogs = new WeakMap();
   const watchdogTimers = new Set();
@@ -282,7 +346,7 @@ export function setup(ctx) {
     advancedHost.appendChild(advanced.element);
     const outputField = createField("Structured output mode", "Auto follows the selected connection provider.");
     const maxTokensField = createField("Maximum tracker output tokens", "Allowed range: 400–2,000 tokens.");
-    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–300 seconds.");
+    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–120 seconds.");
     advanced.body.append(outputField.field, maxTokensField.field, timeoutField.field);
 
     const privateDetails = createFallbackDetails("Private tracker state", false);
@@ -321,9 +385,9 @@ export function setup(ctx) {
     });
     mountedComponents.push(maxTokens);
     const timeout = ctx.components.mountNumericInput(timeoutField.slot, {
-      value: 45,
+      value: 30,
       min: 5,
-      max: 300,
+      max: 120,
       step: 5,
       integer: true,
     });
@@ -332,7 +396,7 @@ export function setup(ctx) {
       checked: false,
       label: "Show private tracker state",
       hint: "Displays extension-owned continuity data for this chat.",
-      onChange: requestStatus,
+      onChange: setPrivateStateVisibility,
     });
     mountedComponents.push(showPrivate);
 
@@ -367,7 +431,7 @@ export function setup(ctx) {
         set: (value) => timeout.update({ value }),
       },
       showPrivate: {
-        get: () => showPrivate.getValue(),
+        get: () => showPrivateState,
       },
       connectionStatus,
     };
@@ -411,11 +475,11 @@ export function setup(ctx) {
     maxTokens.step = "100";
     maxTokens.className = "dsc-fallback-control";
     maxTokensField.slot.appendChild(maxTokens);
-    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–300 seconds.");
+    const timeoutField = createField("Tracker timeout in seconds", "Allowed range: 5–120 seconds.");
     const timeout = document.createElement("input");
     timeout.type = "number";
     timeout.min = "5";
-    timeout.max = "300";
+    timeout.max = "120";
     timeout.step = "5";
     timeout.className = "dsc-fallback-control";
     timeoutField.slot.appendChild(timeout);
@@ -427,7 +491,7 @@ export function setup(ctx) {
     showPrivateLabel.className = "dsc-fallback-check";
     const showPrivate = document.createElement("input");
     showPrivate.type = "checkbox";
-    showPrivate.addEventListener("change", requestStatus);
+    showPrivate.addEventListener("change", () => setPrivateStateVisibility(showPrivate.checked));
     const showPrivateText = document.createElement("span");
     showPrivateText.textContent = "Show extension-owned continuity data for this chat.";
     showPrivateLabel.append(showPrivate, showPrivateText);
@@ -480,7 +544,7 @@ export function setup(ctx) {
         set: (value) => { timeout.value = String(value); },
       },
       showPrivate: {
-        get: () => showPrivate.checked,
+        get: () => showPrivateState,
       },
       connectionStatus,
     };
@@ -526,8 +590,20 @@ export function setup(ctx) {
     ctx.sendToBackend({
       type: "continuity_get_status",
       chatId: activeChatId,
-      includePrivate: controls?.showPrivate.get() === true,
+      includePrivate: showPrivateState,
     });
+  }
+
+  function renderPrivateState(status) {
+    const presentation = privateStatePresentation(showPrivateState, status, privateStateCache);
+    privateStateCache = presentation.cache;
+    stateText.textContent = presentation.text;
+  }
+
+  function setPrivateStateVisibility(visible) {
+    showPrivateState = visible === true;
+    renderPrivateState(latestStatus);
+    requestStatus();
   }
 
   function connectionOptions(selected) {
@@ -597,6 +673,7 @@ export function setup(ctx) {
 
     const scene = publicState.scene;
     const woman = scene.womanCurrent ?? {};
+    const womanStable = scene.womanStable ?? {};
     addGroup("Current scene", [
       ["Date", scene.date],
       ["Time", scene.time],
@@ -607,6 +684,10 @@ export function setup(ctx) {
       ["Spatial", scene.spatial],
     ]);
     addGroup("Woman — observable continuity", [
+      ["Face", womanStable.face],
+      ["Eyes", womanStable.eyes],
+      ["Skin", womanStable.skin],
+      ["Body type & proportions", womanStable.bodyTypeAndProportions],
       ["Hair & grooming", woman.hairAndGrooming],
       ["Dress", woman.dress],
       ["Physical state", woman.physicalState],
@@ -637,19 +718,59 @@ export function setup(ctx) {
     }
   }
 
+  function mountedProfileCards() {
+    const cards = new Set();
+    if (typeof ctx.dom.listMessageElements === "function") {
+      for (const entry of ctx.dom.listMessageElements()) {
+        for (const card of cardsInside(entry?.element ?? entry)) cards.add(card);
+      }
+    }
+    if (cards.size === 0) {
+      for (const card of cardsInside(document)) cards.add(card);
+    }
+    return [...cards];
+  }
+
   function profileCardsForStatus(status) {
     if (!status?.caseMessageId) return [];
     const bubble = ctx.dom.findMessageElement(status.caseMessageId);
     const exact = cardsInside(bubble);
     if (exact.length > 0) return exact;
 
-    const fallback = [];
-    for (const card of document.querySelectorAll(".ds-state-card")) {
-      if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
-        fallback.push(card);
-      }
-    }
+    const fallback = mountedProfileCards();
     return fallback.length > 0 ? [fallback.at(-1)] : [];
+  }
+
+  function setImportantStyle(element, property, value) {
+    element?.style?.setProperty(property, value, "important");
+  }
+
+  function applyProfileCardChrome(card, { manual, level = "green" }) {
+    const checking = card.querySelector(".ds-engine-checking");
+    const missing = card.querySelector(".ds-engine-missing");
+    const live = card.querySelector(".ds-engine-live");
+    const badge = card.querySelector(".ds-tracker-status");
+    const button = card.querySelector(PROFILE_BUTTON_SELECTOR);
+
+    setImportantStyle(checking, "display", "none");
+    setImportantStyle(missing, "display", "none");
+    setImportantStyle(live, "display", "inline");
+    setImportantStyle(live, "visibility", "visible");
+    if (badge) {
+      setImportantStyle(
+        badge,
+        "color",
+        level === "amber"
+          ? "var(--lumiverse-warning, #c89b62)"
+          : "var(--lumiverse-success, #86af92)",
+      );
+    }
+    if (button) {
+      setImportantStyle(button, "display", manual ? "inline-flex" : "none");
+      setImportantStyle(button, "visibility", manual ? "visible" : "hidden");
+      setImportantStyle(button, "pointer-events", manual ? "auto" : "none");
+      setImportantStyle(button, "animation", "none");
+    }
   }
 
   function clearCardWatchdog(card) {
@@ -661,14 +782,16 @@ export function setup(ctx) {
   }
 
   function armCardWatchdog(card) {
-    if (!(card instanceof Element) || cardWatchdogs.has(card)) return;
+    if (!isElementLike(card) || cardWatchdogs.has(card)) return;
     if (!card.dataset.engineState) card.dataset.engineState = "checking";
+    applyProfileCardChrome(card, { manual: false, level: "green" });
     const timer = setTimeout(() => {
       watchdogTimers.delete(timer);
       cardWatchdogs.delete(card);
       if (!card.isConnected || card.dataset.engineState !== "checking") return;
       card.dataset.engineState = "frontend-only";
       card.dataset.engineManual = "true";
+      applyProfileCardChrome(card, { manual: true, level: "amber" });
       const badge = card.querySelector(".ds-tracker-status");
       if (badge) {
         badge.dataset.engineLevel = "amber";
@@ -695,6 +818,7 @@ export function setup(ctx) {
       clearCardWatchdog(card);
       card.dataset.engineState = presentation.state;
       card.dataset.engineManual = presentation.manual ? "true" : "false";
+      applyProfileCardChrome(card, presentation);
       const badge = card.querySelector(".ds-tracker-status");
       if (badge) {
         badge.dataset.engineLevel = presentation.level;
@@ -726,21 +850,21 @@ export function setup(ctx) {
     latestStatus = status;
     if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
     statusText.textContent = status.text;
+    const localRevisionAt = formatLocalTimestamp(status.lastRevisionAt);
     statusMeta.textContent = status.chatId
-      ? `Revision ${status.revision || 0}${status.updatedAt ? ` · ${status.updatedAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
+      ? `Revision ${status.revision || 0}${localRevisionAt ? ` · Last revised ${localRevisionAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
       : "No active chat.";
+    statusMeta.title = status.lastRevisionAt || "";
     const badgeText = status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
     const badgeColor = status.processing ? "info" : status.level === "green" ? "success" : "warning";
     badgeControl.update({ text: badgeText, color: badgeColor });
     controls.enabled.set(status.config?.enabled !== false);
     controls.outputMode.set(status.config?.outputMode ?? "auto");
     controls.maxTokens.set(status.config?.maxTokens ?? 2_000);
-    controls.timeout.set(Math.round((status.config?.timeoutMs ?? 45_000) / 1_000));
+    controls.timeout.set(Math.round((status.config?.timeoutMs ?? 30_000) / 1_000));
     renderConnections();
     renderPublicState(status.publicState);
-    stateText.textContent = controls.showPrivate.get() === true && status.state
-      ? JSON.stringify(status.state, null, 2)
-      : "Private state is hidden.";
+    renderPrivateState(status);
     tab.setBadge(status.level === "green" ? null : "!");
     updateProfileCards(status);
   }
@@ -805,11 +929,7 @@ export function setup(ctx) {
     observer.observe(document.body, { childList: true, subtree: true });
     cleanups.push(() => observer.disconnect());
   }
-  for (const card of document.querySelectorAll(".ds-state-card")) {
-    if (card.matches(PROFILE_CARD_SELECTOR) || card.querySelector(PROFILE_BUTTON_SELECTOR)) {
-      armCardWatchdog(card);
-    }
-  }
+  for (const card of mountedProfileCards()) armCardWatchdog(card);
   cleanups.push(() => {
     for (const timer of watchdogTimers) clearTimeout(timer);
     watchdogTimers.clear();
@@ -848,11 +968,15 @@ export function setup(ctx) {
   cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
     latestStatus = null;
+    privateStateCache = null;
+    renderPrivateState(null);
+    for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
   }));
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
       if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
+      for (const card of mountedProfileCards()) armCardWatchdog(card);
       requestStatus();
       scheduleProfileCardSync();
     }));

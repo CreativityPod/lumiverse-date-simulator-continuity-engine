@@ -5,9 +5,9 @@ import {
   recoverTrackerStateDetailed,
 } from "./schemas.js";
 
-export const DEFAULT_TRACKER_TIMEOUT_MS = 45_000;
+export const DEFAULT_TRACKER_TIMEOUT_MS = 30_000;
 export const MIN_TRACKER_TIMEOUT_MS = 5_000;
-export const MAX_TRACKER_TIMEOUT_MS = 300_000;
+export const MAX_TRACKER_TIMEOUT_MS = 120_000;
 export const DEFAULT_TRACKER_MAX_TOKENS = 2_000;
 export const MIN_TRACKER_MAX_TOKENS = 400;
 export const MAX_TRACKER_MAX_TOKENS = 2_000;
@@ -23,19 +23,24 @@ function normalizeTrackerTimeoutMs(value) {
 const TRACKER_SYSTEM_PROMPT = `You are the private continuity recorder for Date Simulator. Update a compact current-state ledger from canonical prior state and one newly completed public roleplay turn.
 
 Hard rules:
-- Record consequences of the supplied turn; never create new dialogue, actions, events, NPC activity, promises, attraction, consent, or story developments.
+- Record consequences of the supplied turn; never create new dialogue, actions, events, NPC activity, promises, consent, or public story developments.
 - Preserve an established value unless the new turn directly changes or corrects it. Use "Unknown" instead of guessing.
 - The user controls the man. Never invent his thoughts, feelings, motives, attraction, consent, body, outfit, position, or voluntary action. You may record only facts the user explicitly established or direct physical consequences already narrated.
-- womanCurrent contains only temporary hair/grooming, dress/layer state, physical condition, and current mental state or immediate intent. Permanent traits belong to the stable case and must not be copied there.
+- womanStable contains stable observable appearance copied conservatively from the stable case and public opening: face structure and enduring facial features; visible eye color, shape, and other enduring eye traits; visible skin tone, complexion, and enduring marks; and nonsexualized body type, frame, and proportions. Preserve these fields unless the transcript explicitly corrects them or establishes a plausible lasting change. Never infer a trait from ethnicity, ancestry, nationality, culture, personality, clothing, or attraction; use "Unknown" for anything the case and public scene do not establish.
+- womanCurrent contains only temporary hair/grooming, dress/layer state, physical condition, and current mental state or immediate intent. Expressions, makeup, temporary skin changes, posture, weight change, and other current or changing presentation belong here or in spatial when supported; do not overwrite womanStable with them.
 - manVisible contains only currently relevant visible facts explicitly established by the user or directly caused by canonical events: visible appearance, clothing/layer state, and temporary physical condition. Preserve established facts until changed, use "Unknown" for anything unset, and never infer a body detail, outfit, condition, position, or voluntary action. Positions, contact, and held or carried items belong in spatial.
-- Mental state is qualitative and conservative. Attraction, comfort, trust, availability, willingness, and consent are separate. Do not convert private state into visible behavior.
+- Mental state is temporary mood or immediate intent. ARC RESPONSE separately preserves the woman's qualitative private response to this man: attention, comfort/safety, rapport/trust, physical attraction, personal interest, romantic interest, adult sexual interest, willingness to continue, contact-exchange interest, desire to leave, and active uncertainty.
+- Update private response only when the stable profile plus canonical observable interaction directly supports a conservative change. Change only affected dimensions, normally by one qualitative step; use mixed or uncertain language when evidence conflicts. This records private continuity and does not create a public event.
+- Consent is action-specific and is never a response field or an inference from attraction, comfort, prior willingness, clothing, physiology, or silence. Teen Mode sexualInterest must be "Not applicable in Teen Mode."
+- Never use numbers, points, percentages, scores, or game meters in private response fields. Never convert private response into visible behavior unless the public turn independently established that behavior.
 - NPCS includes named or plausibly recurring NPCs only. Preserve active recurring NPCs. Do not add incidental staff or passersby.
 - OBJECTIVES contains at most three immediate plans, commitments, pressures, or intended next steps. Never infer an objective for the man unless he stated it.
-- If no relationship change occurred, preserve the prior latestChange and sourceMessageId exactly. If a material relationship change occurred, write one concise change and set sourceMessageId to the supplied assistant message id.
+- If no relationship change occurred, preserve relationship.latestChange and its sourceMessageId exactly. If one occurred, write one concise change and use the supplied assistant message id.
+- If no private-response dimension changed, preserve response.latestChange and its sourceMessageId exactly. If supported response changed, summarize only the changed dimensions and use the supplied assistant message id.
 - Return only the JSON object required by the schema. No markdown or commentary.
 
 Required JSON shape (every shown property is required; npcs and objectives may be empty arrays):
-{"schemaVersion":1,"scene":{"date":"string","time":"string","weather":"string","location":"string","immediateContext":"string","womanCurrent":{"hairAndGrooming":"string","dress":"string","physicalState":"string","mentalState":"string"},"manVisible":"string","spatial":"string"},"arc":{"npcs":[{"name":"string","role":"string","relationship":"string","currentStatus":"string","immediateObjective":"string"}],"relationship":{"establishedStatus":"string","womanPosture":"string","activeBoundaryOrConcern":"string","latestChange":"string or empty","sourceMessageId":"matching id or empty"},"objectives":[{"owner":"string","objective":"string","status":"string"}]}}`;
+{"schemaVersion":3,"scene":{"date":"string","time":"string","weather":"string","location":"string","immediateContext":"string","womanStable":{"face":"string","eyes":"string","skin":"string","bodyTypeAndProportions":"string"},"womanCurrent":{"hairAndGrooming":"string","dress":"string","physicalState":"string","mentalState":"string"},"manVisible":"string","spatial":"string"},"arc":{"npcs":[{"name":"string","role":"string","relationship":"string","currentStatus":"string","immediateObjective":"string"}],"relationship":{"establishedStatus":"string","womanPosture":"string","activeBoundaryOrConcern":"string","latestChange":"string or empty","sourceMessageId":"matching id or empty"},"response":{"availableAttention":"string","comfortAndSafety":"string","rapportAndTrust":"string","physicalAttraction":"string","personalInterest":"string","romanticInterest":"string","sexualInterest":"string","willingnessToContinue":"string","contactExchangeInterest":"string","desireToLeave":"string","activeUncertainty":"string","latestChange":"string or empty","sourceMessageId":"matching id or empty"},"objectives":[{"owner":"string","objective":"string","status":"string"}]}}`;
 
 function trackerUserPrompt({ caseText, previousState, userText, assistantText, sourceMessageId }) {
   return `ASSISTANT MESSAGE ID
@@ -57,7 +62,7 @@ Produce schemaVersion ${TRACKER_SCHEMA_VERSION} state now.`;
 }
 
 function migrationUserPrompt({ caseText, legacySceneText, transcript, sourceMessageId }) {
-  return `This is an explicit migration from Date Simulator v1.3.1. Build one conservative v1.4 tracker state from the saved case, latest legacy scene, and selected recent transcript. Do not add facts that are absent or resolve ambiguous relationship state.
+  return `This is an explicit migration from Date Simulator v1.3.1. Build one conservative current tracker state from the saved case, latest legacy scene, and selected recent transcript. Do not add facts that are absent or resolve ambiguous relationship or private-response state.
 
 ASSISTANT MESSAGE ID
 ${sourceMessageId}
@@ -169,11 +174,12 @@ async function resolveConnection(spindleApi, connectionId, userId) {
   }
 }
 
-async function generateCandidate(spindleApi, messages, config, sourceMessageId, previousState, userId) {
+async function generateCandidate(spindleApi, messages, config, sourceMessageId, previousState, caseText, userId) {
   const connection = await resolveConnection(spindleApi, config.connectionId, userId);
   const allowedSourceMessageIds = [
     sourceMessageId,
     previousState?.arc?.relationship?.sourceMessageId,
+    previousState?.arc?.response?.sourceMessageId,
   ].filter(Boolean);
   const makeRequest = (attemptMessages) => {
     const input = {
@@ -209,7 +215,11 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       : extractJson(toolState ?? response?.content);
     return {
       parsed,
-      validation: recoverTrackerStateDetailed(parsed, { previousState, allowedSourceMessageIds }),
+      validation: recoverTrackerStateDetailed(parsed, {
+        previousState,
+        allowedSourceMessageIds,
+        teenMode: /\bTeen Mode\b/i.test(String(caseText ?? "")),
+      }),
     };
   };
 
@@ -256,6 +266,7 @@ export async function runTracker(spindleApi, input, config, userId) {
     config,
     input.sourceMessageId,
     input.previousState,
+    input.caseText,
     userId,
   );
 }
@@ -270,6 +281,7 @@ export async function runMigrationTracker(spindleApi, input, config, userId) {
     config,
     input.sourceMessageId,
     null,
+    input.caseText,
     userId,
   );
 }

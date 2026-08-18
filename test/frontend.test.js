@@ -1,7 +1,68 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { profileCardPresentation } from "../src/frontend.js";
+import {
+  cardsInside,
+  formatLocalTimestamp,
+  privateStatePresentation,
+  profileCardPresentation,
+} from "../src/frontend.js";
+
+test("formats tracker timestamps in the requested local time zone", () => {
+  assert.equal(
+    formatLocalTimestamp("2026-08-15T14:30:00.000Z", "en-US", { timeZone: "America/New_York" }),
+    "Aug 15, 2026, 10:30 AM",
+  );
+  assert.equal(formatLocalTimestamp("not-a-timestamp", "en-US"), "not-a-timestamp");
+});
+
+test("private-state display keeps requested data across stale public-only status responses", () => {
+  const visible = privateStatePresentation(true, {
+    chatId: "chat-1",
+    state: { scene: { location: "Cafe" } },
+  });
+  assert.match(visible.text, /"location": "Cafe"/);
+
+  const afterStaleResponse = privateStatePresentation(true, { chatId: "chat-1" }, visible.cache);
+  assert.equal(afterStaleResponse.text, visible.text);
+  assert.equal(privateStatePresentation(false, { chatId: "chat-1" }, visible.cache).cache, null);
+});
+
+test("private-state display does not leak cached data across chats", () => {
+  const cached = { chatId: "chat-1", state: { private: true } };
+  assert.deepEqual(
+    privateStatePresentation(true, { chatId: "chat-2" }, cached),
+    { text: "Loading private state…", cache: null },
+  );
+});
+
+test("finds a profile card inside an open Shadow DOM island without realm checks", () => {
+  const card = {
+    nodeType: 1,
+    matches: (selector) => selector.includes("ds-state-card"),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const shadowRoot = {
+    querySelectorAll: (selector) => {
+      if (selector === ".ds-state-card[data-ds-profile-card='true']") return [card];
+      if (selector === "*") return [card];
+      return [];
+    },
+  };
+  const host = {
+    nodeType: 1,
+    shadowRoot,
+    matches: () => false,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const documentRoot = {
+    querySelectorAll: (selector) => selector === "*" ? [host] : [],
+  };
+
+  assert.deepEqual(cardsInside(documentRoot), [card]);
+});
 
 test("saved profiles hide the manual fallback even while tracker status is degraded", () => {
   const presentation = profileCardPresentation({

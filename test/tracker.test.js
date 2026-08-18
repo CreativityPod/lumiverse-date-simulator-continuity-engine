@@ -20,13 +20,17 @@ test("tracker prompt contains the source id and agency constraints", () => {
   });
   assert.match(prompt, /a1/);
   assert.match(prompt, /She waves back/);
+  assert.match(trackerTest.systemPrompt, /physicalAttraction/);
+  assert.match(trackerTest.systemPrompt, /Consent is action-specific/);
+  assert.match(trackerTest.systemPrompt, /womanStable/);
+  assert.match(trackerTest.systemPrompt, /Never use numbers, points, percentages/);
   assert.match(trackerTest.systemPrompt, /"objectives":\[\{"owner":"string","objective":"string","status":"string"\}\]/);
 });
 
-test("tracker timeout accepts five minutes and clamps larger values", () => {
-  assert.equal(trackerTest.normalizeTrackerTimeoutMs(300_000), 300_000);
-  assert.equal(trackerTest.normalizeTrackerTimeoutMs(900_000), 300_000);
-  assert.equal(trackerTest.normalizeTrackerTimeoutMs("invalid"), 45_000);
+test("tracker timeout fits inside the five-minute interceptor budget", () => {
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs(120_000), 120_000);
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs(300_000), 120_000);
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs("invalid"), 30_000);
 });
 
 test("uses native structured output only for recognized providers", () => {
@@ -65,7 +69,7 @@ test("retries one rejected tracker response with the validation reason", async (
       quiet: async (input) => {
         requests.push(input);
         return requests.length === 1
-          ? { content: '{"schemaVersion":1}', finish_reason: "stop" }
+          ? { content: '{"schemaVersion":3}', finish_reason: "stop" }
           : { content: JSON.stringify(state), finish_reason: "stop" };
       },
     },
@@ -86,7 +90,7 @@ test("retries one rejected tracker response with the validation reason", async (
   assert.equal(requests.length, 2);
   assert.match(requests[1].messages.at(-1).content, /scene must be an object/);
   assert.equal(requests[1].messages.at(-2).role, "assistant");
-  assert.equal(requests[1].messages.at(-2).content, '{"schemaVersion":1}');
+  assert.equal(requests[1].messages.at(-2).content, '{"schemaVersion":3}');
 });
 
 test("repairs a structurally empty state instead of treating defaults as an update", async () => {
@@ -99,7 +103,7 @@ test("repairs a structurally empty state instead of treating defaults as an upda
       quiet: async (input) => {
         requests.push(input);
         return requests.length === 1
-          ? { content: '{"schemaVersion":1,"scene":{},"arc":{}}', finish_reason: "stop" }
+          ? { content: '{"schemaVersion":3,"scene":{},"arc":{}}', finish_reason: "stop" }
           : { content: JSON.stringify(state), finish_reason: "stop" };
       },
     },
@@ -148,6 +152,31 @@ test("accepts a conservative objective fallback without a second model call", as
   assert.equal(result.state.scene.time, "8:15 PM");
   assert.deepEqual(result.state.arc.objectives, previousState.arc.objectives);
   assert.match(result.warnings.join("; "), /status must not be empty/);
+});
+
+test("normalizes Teen Mode sexual interest locally without a repair call", async () => {
+  const candidate = cloneEmptyState();
+  candidate.arc.response.sexualInterest = "Mild";
+  let calls = 0;
+  const spindleApi = {
+    connections: { list: async () => [{ id: "local", provider: "openai-compatible", is_default: true }] },
+    generate: { quiet: async () => { calls += 1; return { content: JSON.stringify(candidate), finish_reason: "stop" }; } },
+  };
+  const result = await runTracker(
+    spindleApi,
+    {
+      caseText: "CASE: Teen Mode; both participants 17; nonsexual.",
+      previousState: null,
+      userText: "Hello.",
+      assistantText: "She says hello.",
+      sourceMessageId: "a-teen",
+    },
+    { connectionId: "", outputMode: "auto", maxTokens: 2_000, timeoutMs: 5_000 },
+    "user-1",
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.state.arc.response.sexualInterest, "Not applicable in Teen Mode.");
+  assert.match(result.warnings.join("; "), /Teen Mode nonsexual value/);
 });
 
 test("accepts a forced Anthropic tracker tool call", async () => {

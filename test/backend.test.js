@@ -87,14 +87,21 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(backendTest.normalizeConfig({}).outputMode, "auto");
   assert.equal(backendTest.normalizeConfig({ outputMode: "anthropic" }).outputMode, "anthropic");
   assert.equal(backendTest.normalizeConfig({ outputMode: "unsupported" }).outputMode, "auto");
-  assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 300_000);
-  assert.equal(backendTest.normalizeConfig({ timeoutMs: 900_000 }).timeoutMs, 300_000);
+  assert.equal(backendTest.normalizeConfig({ timeoutMs: 120_000 }).timeoutMs, 120_000);
+  assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 120_000);
 
   const privateState = cloneEmptyState();
+  privateState.scene.womanStable.face = "Oval face with a small chin scar.";
+  privateState.scene.womanStable.eyes = "Dark brown, almond-shaped eyes.";
+  privateState.scene.womanStable.skin = "Medium-brown skin with freckles.";
+  privateState.scene.womanStable.bodyTypeAndProportions = "Tall, sturdy build with balanced proportions.";
   privateState.scene.womanCurrent.mentalState = "Privately uncertain";
   privateState.arc.relationship.womanPosture = "Privately guarded";
   privateState.arc.relationship.activeBoundaryOrConcern = "Private boundary";
   privateState.arc.relationship.sourceMessageId = "a-private";
+  privateState.arc.response.physicalAttraction = "Privately favorable";
+  privateState.arc.response.latestChange = "Private attraction changed";
+  privateState.arc.response.sourceMessageId = "a-private";
   privateState.arc.npcs.push({
     name: "Nia",
     role: "Friend",
@@ -108,16 +115,27 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(publicState.arc.relationship.womanPosture, undefined);
   assert.equal(publicState.arc.relationship.activeBoundaryOrConcern, undefined);
   assert.equal(publicState.arc.relationship.sourceMessageId, undefined);
+  assert.equal(publicState.arc.response, undefined);
   assert.equal(publicState.arc.npcs[0].immediateObjective, undefined);
   assert.equal(publicState.arc.objectives, undefined);
   assert.equal(publicState.scene.womanCurrent.dress, "Unknown");
+  assert.equal(publicState.scene.womanStable.face, "Oval face with a small chin scar.");
+  assert.equal(publicState.scene.womanStable.eyes, "Dark brown, almond-shaped eyes.");
+  assert.equal(publicState.scene.womanStable.skin, "Medium-brown skin with freckles.");
+  assert.equal(
+    publicState.scene.womanStable.bodyTypeAndProportions,
+    "Tall, sturdy build with balanced proportions.",
+  );
   assert.equal(publicState.arc.npcs[0].name, "Nia");
 
   const setupPrompt = [
-    { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
+    { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
     { role: "user", content: "Surprise me" },
   ];
-  assert.equal(await interceptor(setupPrompt, { chatId: "chat-1" }), setupPrompt);
+  const sampledSetup = await interceptor(setupPrompt, { chatId: "chat-1" });
+  assert.equal(sampledSetup.breakdown[0].name, "Date Simulator Case Sampler");
+  assert.match(sampledSetup.messages[1].content, /date_simulator_case_sampler/);
+  assert.equal(sampledSetup.messages[2].content, "Surprise me");
   messages.push(opening);
 
   await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
@@ -136,25 +154,41 @@ test("background reconciliation saves state and the interceptor injects one bran
       connectionId: "",
       outputMode: "plain",
       maxTokens: 2_000,
-      timeoutMs: 300_000,
+      timeoutMs: 120_000,
     },
   }, "user-1");
-  assert.equal(files.get("config.json").timeoutMs, 300_000);
+  assert.equal(files.get("config.json").timeoutMs, 120_000);
   assert.equal(files.get("config.json").outputMode, "plain");
   assert.ok(frontendMessages.some(
-    (payload) => payload.type === "continuity_config_saved" && payload.config.timeoutMs === 300_000,
+    (payload) => payload.type === "continuity_config_saved" && payload.config.timeoutMs === 120_000,
   ));
 
   await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: opening }, "user-1");
 
   assert.equal(variables.get("chat-1:date_simulator.phase"), "active");
-  assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "1");
+  assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "3");
   assert.match(variables.get("chat-1:date_simulator.case"), /DS-V14-BACKEND/);
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).date, "Unknown");
-  assert.equal(files.get("chats/chat-1.json").revision, 1);
+  assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).womanStable.face, "Unknown");
+  assert.equal(JSON.parse(variables.get("chat-1:date_simulator.arc_v2")).response.physicalAttraction, "Unknown");
+  const firstRevisionStore = files.get("chats/chat-1.json");
+  const firstCheckpoint = Object.values(firstRevisionStore.checkpoints)[0];
+  assert.equal(firstRevisionStore.revision, 1);
+  assert.ok(firstRevisionStore.lastRevisionAt);
+  assert.equal(firstRevisionStore.lastRevisionAt, firstCheckpoint.createdAt);
   assert.ok(frontendMessages.some((payload) => payload.level === "green"));
   assert.ok(generatedUsers.length > 0);
   assert.ok(generatedUsers.every((userId) => userId === "user-1"));
+
+  // A page reload/status request schedules a verification pass. Drain that pass
+  // through the per-chat queue and confirm it did not create a revision.
+  await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
+  await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: opening }, "user-1");
+  assert.equal(files.get("chats/chat-1.json").revision, 1);
+  assert.equal(files.get("chats/chat-1.json").lastRevisionAt, firstRevisionStore.lastRevisionAt);
+  assert.ok(frontendMessages.some(
+    (payload) => payload.revision === 1 && payload.lastRevisionAt === firstRevisionStore.lastRevisionAt,
+  ));
 
   await frontendHandler({
     type: "continuity_reprocess",
@@ -244,6 +278,7 @@ test("saves the private profile before tracker completion and blocks the next pr
   assert.equal(variables.get("chat-barrier:date_simulator.phase"), "active");
   assert.match(variables.get("chat-barrier:date_simulator.case"), /DS-V14-BACKEND/);
   assert.equal(files.get("chats/chat-barrier.json").revision, 0);
+  assert.equal(files.get("chats/chat-barrier.json").lastRevisionAt, "");
 
   const nextPrompt = [
     { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
@@ -263,6 +298,7 @@ test("saves the private profile before tracker completion and blocks the next pr
   const result = await intercepted;
   assert.equal(promptFinished, true);
   assert.equal(files.get("chats/chat-barrier.json").revision, 1);
+  assert.ok(files.get("chats/chat-barrier.json").lastRevisionAt);
   assert.match(result.messages.map((message) => String(message.content)).join("\n"), /CURRENT SCENE/);
 
   delete globalThis.spindle;
