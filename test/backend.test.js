@@ -96,6 +96,12 @@ test("background reconciliation saves state and the interceptor injects one bran
   privateState.scene.womanStable.skin = "Medium-brown skin with freckles.";
   privateState.scene.womanStable.bodyTypeAndProportions = "Tall, sturdy build with balanced proportions.";
   privateState.scene.womanCurrent.mentalState = "Privately uncertain";
+  privateState.scene.manVisible.dressAndLayers = "User-established navy jacket.";
+  privateState.scene.spatial.proximityAndContact = "Across a small table; no contact.";
+  privateState.scene.lifecycle.reason = "Private lifecycle explanation.";
+  privateState.scene.lifecycle.sourceMessageId = "a-private";
+  privateState.arc.lifecycle.reason = "Private arc explanation.";
+  privateState.arc.lifecycle.sourceMessageId = "a-private";
   privateState.arc.relationship.womanPosture = "Privately guarded";
   privateState.arc.relationship.activeBoundaryOrConcern = "Private boundary";
   privateState.arc.relationship.sourceMessageId = "a-private";
@@ -108,8 +114,15 @@ test("background reconciliation saves state and the interceptor injects one bran
     relationship: "Woman's friend",
     currentStatus: "At the cafe",
     immediateObjective: "Privately assess the man",
+    sourceMessageId: "a-private",
   });
-  privateState.arc.objectives.push({ owner: "Woman", objective: "Private objective", status: "Active" });
+  privateState.arc.objectives.push({
+    owner: "Woman",
+    objective: "Private objective",
+    status: "Active",
+    timing: "Before closing.",
+    sourceMessageId: "a-private",
+  });
   const publicState = backendTest.publicTrackerSnapshot(privateState);
   assert.equal(publicState.scene.womanCurrent.mentalState, undefined);
   assert.equal(publicState.arc.relationship.womanPosture, undefined);
@@ -117,6 +130,7 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(publicState.arc.relationship.sourceMessageId, undefined);
   assert.equal(publicState.arc.response, undefined);
   assert.equal(publicState.arc.npcs[0].immediateObjective, undefined);
+  assert.equal(publicState.arc.npcs[0].sourceMessageId, undefined);
   assert.equal(publicState.arc.objectives, undefined);
   assert.equal(publicState.scene.womanCurrent.dress, "Unknown");
   assert.equal(publicState.scene.womanStable.face, "Oval face with a small chin scar.");
@@ -127,6 +141,14 @@ test("background reconciliation saves state and the interceptor injects one bran
     "Tall, sturdy build with balanced proportions.",
   );
   assert.equal(publicState.arc.npcs[0].name, "Nia");
+  assert.equal(publicState.scene.manVisible.dressAndLayers, "User-established navy jacket.");
+  assert.equal(publicState.scene.spatial.proximityAndContact, "Across a small table; no contact.");
+  assert.equal(publicState.scene.lifecycle.status, "active");
+  assert.equal(publicState.scene.lifecycle.reason, undefined);
+  assert.equal(publicState.scene.lifecycle.sourceMessageId, undefined);
+  assert.equal(publicState.arc.lifecycle.status, "active");
+  assert.equal(publicState.arc.lifecycle.reason, undefined);
+  assert.equal(publicState.arc.lifecycle.sourceMessageId, undefined);
 
   const setupPrompt = [
     { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
@@ -166,7 +188,7 @@ test("background reconciliation saves state and the interceptor injects one bran
   await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: opening }, "user-1");
 
   assert.equal(variables.get("chat-1:date_simulator.phase"), "active");
-  assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "3");
+  assert.equal(variables.get("chat-1:date_simulator.tracker_version"), "4");
   assert.match(variables.get("chat-1:date_simulator.case"), /DS-V14-BACKEND/);
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).date, "Unknown");
   assert.equal(JSON.parse(variables.get("chat-1:date_simulator.scene_v2")).womanStable.face, "Unknown");

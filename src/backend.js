@@ -138,9 +138,19 @@ async function mirrorStore(chatId, store, context) {
   const current = store.current;
   const legacyArc = current
     ? {
-      npcs: current.arc?.npcs ?? [],
+      npcs: (current.arc?.npcs ?? []).map((npc) => ({
+        name: npc.name,
+        role: npc.role,
+        relationship: npc.relationship,
+        currentStatus: npc.currentStatus,
+        immediateObjective: npc.immediateObjective,
+      })),
       relationship: current.arc?.relationship ?? {},
-      objectives: current.arc?.objectives ?? [],
+      objectives: (current.arc?.objectives ?? []).map((objective) => ({
+        owner: objective.owner,
+        objective: objective.objective,
+        status: objective.status,
+      })),
     }
     : null;
   await Promise.all([
@@ -196,7 +206,19 @@ export function publicTrackerSnapshot(state) {
   const womanStable = scene.womanStable && typeof scene.womanStable === "object"
     ? scene.womanStable
     : {};
+  const sceneLifecycle = scene.lifecycle && typeof scene.lifecycle === "object"
+    ? scene.lifecycle
+    : {};
+  const manVisible = scene.manVisible && typeof scene.manVisible === "object"
+    ? scene.manVisible
+    : {};
+  const spatial = scene.spatial && typeof scene.spatial === "object"
+    ? scene.spatial
+    : {};
   const arc = state.arc && typeof state.arc === "object" ? state.arc : {};
+  const arcLifecycle = arc.lifecycle && typeof arc.lifecycle === "object"
+    ? arc.lifecycle
+    : {};
   const relationship = arc.relationship && typeof arc.relationship === "object"
     ? arc.relationship
     : {};
@@ -211,6 +233,9 @@ export function publicTrackerSnapshot(state) {
       weather: text(scene.weather),
       location: text(scene.location),
       immediateContext: text(scene.immediateContext),
+      lifecycle: {
+        status: text(sceneLifecycle.status, "active"),
+      },
       womanStable: {
         face: text(womanStable.face),
         eyes: text(womanStable.eyes),
@@ -222,10 +247,22 @@ export function publicTrackerSnapshot(state) {
         dress: text(woman.dress),
         physicalState: text(woman.physicalState),
       },
-      manVisible: text(scene.manVisible),
-      spatial: text(scene.spatial),
+      manVisible: {
+        appearance: text(manVisible.appearance),
+        dressAndLayers: text(manVisible.dressAndLayers),
+        physicalState: text(manVisible.physicalState),
+      },
+      spatial: {
+        womanPosition: text(spatial.womanPosition),
+        manPosition: text(spatial.manPosition),
+        proximityAndContact: text(spatial.proximityAndContact),
+        importantItems: text(spatial.importantItems),
+      },
     },
     arc: {
+      lifecycle: {
+        status: text(arcLifecycle.status, "active"),
+      },
       npcs: Array.isArray(arc.npcs)
         ? arc.npcs.map((npc) => ({
           name: text(npc?.name),

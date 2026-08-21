@@ -40,8 +40,13 @@ check(frontend.includes("createFallbackDetails"), "Frontend keeps mounted contro
 check(!frontend.includes("mountCollapsibleSection"), "Frontend does not mount controls inside unmounting host collapsibles");
 check(frontend.includes("Continuity snapshot"), "Frontend presents a privacy-safe public continuity snapshot");
 check(backend.includes("publicTrackerSnapshot"), "Backend publishes a privacy-safe tracker projection");
-check(backend.includes("physicalAttraction"), "Backend bundle contains tracker schema v3 private response state");
+check(backend.includes("physicalAttraction"), "Backend bundle contains tracker schema v4 private response state");
 check(backend.includes("bodyTypeAndProportions"), "Backend bundle contains stable woman appearance state");
+check(backend.includes("fictional narrative clock, never wall-clock time"), "Backend distinguishes narrative time from wall-clock delay");
+check(backend.includes("scene.lifecycle"), "Backend bundle contains explicit scene lifecycle state");
+check(backend.includes("arc.lifecycle"), "Backend bundle contains explicit arc lifecycle state");
+check(backend.includes("dressAndLayers"), "Backend bundle contains structured visible-man state");
+check(backend.includes("proximityAndContact"), "Backend bundle contains structured spatial state");
 check(frontend.includes("Body type & proportions"), "Frontend exposes stable woman appearance state");
 check(backend.includes("upgradeTrackerState"), "Backend bundle upgrades older tracker state");
 check(backend.includes("buildSurpriseMeSample"), "Backend bundle contains the prompt-only Surprise Me sampler");

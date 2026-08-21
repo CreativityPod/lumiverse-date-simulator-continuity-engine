@@ -13,7 +13,8 @@ import {
 test("accepts the documented minimal scene and arc schema", () => {
   const state = cloneEmptyState();
   state.scene.date = "Saturday, August 9, 2026";
-  state.scene.manVisible = "User-established navy jacket; no injury established.";
+  state.scene.manVisible.dressAndLayers = "User-established navy jacket.";
+  state.scene.manVisible.physicalState = "No injury established.";
   state.arc.relationship.latestChange = "She agreed to another date.";
   state.arc.relationship.sourceMessageId = "assistant-1";
   state.arc.response.personalInterest = "Growing from neutral to mild interest.";
@@ -23,6 +24,8 @@ test("accepts the documented minimal scene and arc schema", () => {
     owner: "Elena",
     objective: "Confirm the restaurant for Friday.",
     status: "active",
+    timing: "Before Friday evening.",
+    sourceMessageId: "assistant-1",
   });
   assert.deepEqual(
     validateTrackerState(state, { sourceMessageId: "assistant-1" }),
@@ -43,6 +46,8 @@ test("rejects extra fields, oversized objectives, and forged source ids", () => 
     owner: "Elena",
     objective: `Task ${index}`,
     status: "active",
+    timing: "Unknown",
+    sourceMessageId: "",
   }));
   assert.equal(validateTrackerState(tooMany), null);
 
@@ -55,18 +60,46 @@ test("rejects extra fields, oversized objectives, and forged source ids", () => 
   forgedResponse.arc.response.latestChange = "Attraction increased.";
   forgedResponse.arc.response.sourceMessageId = "wrong";
   assert.equal(validateTrackerState(forgedResponse, { sourceMessageId: "right" }), null);
+
+  const forgedLifecycle = cloneEmptyState();
+  forgedLifecycle.scene.lifecycle.reason = "The scene ended.";
+  forgedLifecycle.scene.lifecycle.sourceMessageId = "wrong";
+  assert.equal(validateTrackerState(forgedLifecycle, { sourceMessageId: "right" }), null);
+
+  const forgedNpc = cloneEmptyState();
+  forgedNpc.arc.npcs.push({
+    name: "Nia",
+    role: "Friend",
+    relationship: "Woman's friend",
+    currentStatus: "At the cafe",
+    immediateObjective: "Finish lunch",
+    sourceMessageId: "wrong",
+  });
+  assert.equal(validateTrackerState(forgedNpc, { sourceMessageId: "right" }), null);
 });
 
 test("recovers harmless leaf and objective failures without discarding valid sections", () => {
   const previous = cloneEmptyState();
   previous.scene.weather = "Clear and cool.";
-  previous.arc.objectives = [{ owner: "Elena", objective: "Confirm Friday dinner.", status: "active" }];
+  previous.arc.objectives = [{
+    owner: "Elena",
+    objective: "Confirm Friday dinner.",
+    status: "active",
+    timing: "Before Friday evening.",
+    sourceMessageId: "",
+  }];
 
   const candidate = structuredClone(previous);
   candidate.scene.date = "Sunday, August 10, 2026";
   candidate.scene.weather = "";
   candidate.scene.extraNarration = "ignored";
-  candidate.arc.objectives = [{ owner: "Elena", objective: "Choose a restaurant.", status: "" }];
+  candidate.arc.objectives = [{
+    owner: "Elena",
+    objective: "Choose a restaurant.",
+    status: "",
+    timing: "Before Friday evening.",
+    sourceMessageId: "",
+  }];
 
   const recovered = recoverTrackerStateDetailed(candidate, { previousState: previous });
   assert.ok(recovered.state);
@@ -118,7 +151,7 @@ test("upgrades schema-v1 checkpoints with conservative unknown response and stab
   delete legacy.arc.response;
   legacy.scene.location = "Cafe";
   const upgraded = upgradeTrackerState(legacy);
-  assert.equal(upgraded.schemaVersion, 3);
+  assert.equal(upgraded.schemaVersion, 4);
   assert.equal(upgraded.scene.location, "Cafe");
   assert.equal(upgraded.arc.response.physicalAttraction, "Unknown");
   assert.equal(upgraded.arc.response.sourceMessageId, "");
@@ -132,10 +165,57 @@ test("upgrades schema-v2 checkpoints with conservative unknown stable appearance
   legacy.scene.location = "Train platform";
   legacy.arc.response.rapportAndTrust = "Early rapport established.";
   const upgraded = upgradeTrackerState(legacy);
-  assert.equal(upgraded.schemaVersion, 3);
+  assert.equal(upgraded.schemaVersion, 4);
   assert.equal(upgraded.scene.location, "Train platform");
   assert.equal(upgraded.scene.womanStable.eyes, "Unknown");
   assert.equal(upgraded.arc.response.rapportAndTrust, "Early rapport established.");
+});
+
+test("upgrades schema-v3 combined physical fields and lifecycle conservatively", () => {
+  const legacy = cloneEmptyState();
+  legacy.schemaVersion = 3;
+  delete legacy.scene.lifecycle;
+  legacy.scene.manVisible = "Navy jacket; standing by the table; no injury established.";
+  legacy.scene.spatial = "She is seated; he is standing opposite; her phone is on the table.";
+  delete legacy.arc.lifecycle;
+  legacy.arc.npcs = [{
+    name: "Nia",
+    role: "Friend",
+    relationship: "Woman's friend",
+    currentStatus: "At the cafe",
+    immediateObjective: "Finish lunch",
+  }];
+  legacy.arc.objectives = [{ owner: "Nia", objective: "Finish lunch", status: "active" }];
+
+  const upgraded = upgradeTrackerState(legacy);
+  assert.equal(upgraded.schemaVersion, 4);
+  assert.equal(upgraded.scene.lifecycle.status, "active");
+  assert.match(upgraded.scene.manVisible.appearance, /Navy jacket/);
+  assert.match(upgraded.scene.spatial.proximityAndContact, /standing opposite/);
+  assert.equal(upgraded.arc.npcs[0].sourceMessageId, "");
+  assert.equal(upgraded.arc.objectives[0].timing, "Unknown");
+});
+
+test("validates sourced scene and arc lifecycle endings", () => {
+  const state = cloneEmptyState();
+  state.scene.lifecycle = {
+    status: "ended",
+    reason: "Dinner concluded after they made a later plan.",
+    sourceMessageId: "assistant-end",
+  };
+  state.arc.lifecycle = {
+    status: "active",
+    reason: "A second date remains established.",
+    sourceMessageId: "assistant-end",
+  };
+  assert.ok(validateTrackerState(state, { sourceMessageId: "assistant-end" }));
+
+  state.arc.lifecycle.status = "ended";
+  state.arc.lifecycle.reason = "";
+  assert.match(
+    validateTrackerStateDetailed(state, { sourceMessageId: "assistant-end" }).error,
+    /reason must explain an ended state/,
+  );
 });
 
 test("enforces the nonsexual private-response value in Teen Mode", () => {
@@ -156,6 +236,8 @@ test("provider schema avoids regex and bounded-repetition grammar traps", () => 
   assert.deepEqual(objective.owner, { type: "string" });
   assert.deepEqual(objective.objective, { type: "string" });
   assert.deepEqual(objective.status, { type: "string" });
+  assert.deepEqual(objective.timing, { type: "string" });
+  assert.deepEqual(objective.sourceMessageId, { type: "string" });
   const encoded = JSON.stringify(TRACKER_JSON_SCHEMA);
   assert.doesNotMatch(encoded, /"pattern"|"minLength"|"maxLength"/);
 });

@@ -20,11 +20,11 @@ For v1.5 Surprise Me setup, it also injects one deterministic branch-stable cast
 
 ## What it tracks
 
-Scene: date, time, weather, location, immediate context, the woman's stable face, eyes, skin, body type and proportions, temporary hair/grooming, dress, temporary physical and mental state, the man's explicitly established or directly caused visible state, and spatial continuity.
+Scene: narrative date and time, weather, location, immediate context, active/ended lifecycle, the woman's stable face, eyes, skin, body type and proportions, temporary hair/grooming, dress, temporary physical and mental state, the man's explicitly established or directly caused visible appearance/dress/physical state, and separate positions, proximity/contact, and important-item continuity. Narrative time advances only from completed fictional dialogue and action; real message delay and generation latency never advance it.
 
-Arc: relevant recurring NPCs, current relationship, active boundary or concern, latest sourced relationship change, and at most three immediate objectives.
+Arc: active/ended lifecycle, relevant recurring NPCs with latest-update sources, current relationship, active boundary or concern, latest sourced relationship change, and at most three immediate objectives with timing and latest-update sources.
 
-Private response in tracker schema v3: available attention, comfort and safety, rapport and trust, physical attraction, personal and romantic interest, age-appropriate sexual interest, willingness to continue, contact-exchange interest, desire to leave, and active uncertainty. These are qualitative private continuity fields, never scores, public cues, outcome promises, or consent state. Teen Mode sexual interest is normalized locally to `Not applicable in Teen Mode.` They are omitted from the always-visible public snapshot.
+Private response in tracker schema v4: available attention, comfort and safety, rapport and trust, physical attraction, personal and romantic interest, age-appropriate sexual interest, willingness to continue, contact-exchange interest, desire to leave, and active uncertainty. These are qualitative private continuity fields, never scores, public cues, outcome promises, or consent state. Teen Mode sexual interest is normalized locally to `Not applicable in Teen Mode.` They are omitted from the always-visible public snapshot.
 
 ## Status behavior
 
@@ -45,14 +45,14 @@ Structured-output modes are **Auto**, **OpenAI-compatible JSON Schema**, **Anthr
 
 For LM Studio, the extension's **OpenAI-compatible JSON Schema** mode supplies `response_format` on the API request and does not require the Structured Output control in LM Studio's chat UI to be enabled. The provider-facing schema is intentionally structural and regex-free for llama.cpp grammar compatibility; exact text limits and markup rejection remain enforced locally before state is committed.
 
-The Continuity drawer always shows a privacy-safe observable snapshot: current scene, the woman's stable face/eyes/skin/body traits and visible grooming/dress/physical state, the man's visible state, spatial continuity, established relationship status, latest relationship change, and public NPC facts. Mental state, boundaries, objectives, NPC intentions, and source IDs remain private and appear only when **Show private tracker state** is explicitly enabled.
+The Continuity drawer always shows a privacy-safe observable snapshot: current scene and arc lifecycle, narrative date and time, the woman's stable face/eyes/skin/body traits and visible grooming/dress/physical state, the man's structured visible state, structured spatial continuity, established relationship status, latest relationship change, and public NPC facts. Lifecycle reasons, mental state, boundaries, objectives, NPC intentions, and source IDs remain private and appear only when **Show private tracker state** is explicitly enabled.
 
 The drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, and explicit v1.3.1 migration. It uses Lumiverse's host-mounted selects, switches, numeric inputs, badges, and checkboxes when available. Persistent theme-matched details sections keep those mounted controls alive while collapsed. Older hosts receive one consistent theme-token HTML fallback.
 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.2.5 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.0 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -70,6 +70,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 - Version 1.2.3 displays revision timestamps using the browser's locale and local time zone, and makes private-state visibility explicit and resilient to stale public-only status responses.
 - Version 1.2.4 records revision number and revision time together through one extension-owned commit helper. Reloads, status requests, and no-change reconciliation leave both values untouched; the drawer labels the timestamp as **Last revised**.
 - Version 1.2.5 upgrades tracker state to schema v3 with stable observable face, eyes, skin, and body-type/proportion fields, conservatively migrates older checkpoints to unknown values, and exposes those traits in the privacy-safe Continuity snapshot.
+- Version 1.3.0 upgrades tracker state to schema v4. It treats date and time as a fictional narrative clock unaffected by real response delay, adds sourced current-scene and relationship-arc lifecycle, structures the man's visible state and spatial continuity, adds timing/source data to objectives and source data to recurring NPCs, and conservatively upgrades schema-v1 through schema-v3 checkpoints without creating scene history.
 
 ## Development
 

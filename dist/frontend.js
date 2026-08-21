@@ -675,14 +675,22 @@ export function setup(ctx) {
     const scene = publicState.scene;
     const woman = scene.womanCurrent ?? {};
     const womanStable = scene.womanStable ?? {};
+    const man = scene.manVisible ?? {};
+    const spatial = scene.spatial ?? {};
     addGroup("Current scene", [
       ["Date", scene.date],
       ["Time", scene.time],
+      ["Scene status", scene.lifecycle?.status],
       ["Weather", scene.weather],
       ["Location", scene.location],
       ["Context", scene.immediateContext],
-      ["Man visible", scene.manVisible],
-      ["Spatial", scene.spatial],
+      ["Man appearance", man.appearance],
+      ["Man dress & layers", man.dressAndLayers],
+      ["Man physical state", man.physicalState],
+      ["Woman position", spatial.womanPosition],
+      ["Man position", spatial.manPosition],
+      ["Proximity & contact", spatial.proximityAndContact],
+      ["Important items", spatial.importantItems],
     ]);
     addGroup("Woman — observable continuity", [
       ["Face", womanStable.face],
@@ -696,6 +704,7 @@ export function setup(ctx) {
 
     const relationship = publicState.arc.relationship ?? {};
     addGroup("Relationship", [
+      ["Arc status", publicState.arc.lifecycle?.status],
       ["Status", relationship.establishedStatus],
       ["Latest change", relationship.latestChange],
     ]);

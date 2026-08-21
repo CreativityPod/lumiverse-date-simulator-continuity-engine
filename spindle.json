@@ -1,11 +1,11 @@
 {
-  "version": "1.2.5",
+  "version": "1.3.0",
   "name": "Date Simulator Continuity Engine",
   "identifier": "date_simulator_continuity_engine",
   "author": "CreativityPod",
   "github": "https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine",
   "homepage": "https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine",
-  "description": "Tracks Date Simulator v1.4 and v1.5 scene, relationship, and private response continuity with branch-safe background checkpoints and compact prompt injection.",
+  "description": "Tracks Date Simulator v1.4 and v1.5 narrative time, scene and arc lifecycle, physical continuity, relationships, and private response with branch-safe background checkpoints.",
   "permissions": [
     "generation",
     "interceptor",
