@@ -2,7 +2,7 @@
 
 The extension is split into five small modules:
 
-- `schemas.js`: strict current-scene and current-arc schema, private-response validation, and conservative schema-v1/v2 upgrade.
+- `schemas.js`: strict current-scene and current-arc schema, lifecycle and provenance validation, private-response validation, and conservative schema-v1/v2/v3 upgrade.
 - `state.js`: capsule parsing, branch fingerprints, checkpoint selection, prompt compaction, and canonical injection.
 - `tracker.js`: provider-aware quiet generation, prompts, JSON extraction, and validation.
 - `backend.js`: storage, queues, event reconciliation, migration, variable mirrors, readiness, and prompt interception.
@@ -12,7 +12,13 @@ The extension is split into five small modules:
 
 Each chat has one extension-owned JSON store under `chats/`. It contains the active epoch, current state, per-turn checkpoints, migration baseline, revision, last revision time, and diagnostic status. Revision number and `lastRevisionAt` are committed together only when a tracker or migration checkpoint is created; verification-only reconciliation never changes them. Chat IDs are reduced to safe storage tokens. The backend mirrors scene v2, full arc v2, and a response-free arc v1 compatibility view to private chat variables, but extension storage is canonical.
 
-Tracker schema v1 and v2 states are upgraded locally to schema v3. Existing validated scene, NPC, relationship, response, and objective values are preserved; schema-v1 response fields and pre-v3 stable woman-appearance fields initialize conservatively as unknown. The extension store remains schema v2 because its envelope did not change. Stored transcript messages are never rewritten, so the state can be rebuilt from the selected branch if an extension rollback discards the newer sidecar store.
+Tracker schema v1, v2, and v3 states are upgraded locally to schema v4. Existing validated scene, NPC, relationship, response, and objective values are preserved. Schema-v1 response fields and pre-v3 stable woman-appearance fields initialize conservatively as unknown. The combined v3 `manVisible` value is retained in the new visible-appearance field and the combined v3 `spatial` value is retained in proximity/contact; fields that cannot be separated without guessing initialize as unknown. Scene and arc lifecycle initialize as active, matching the prior runtime assumption, until a newly processed turn establishes an ending. The extension store remains schema v2 because its envelope did not change. Stored transcript messages are never rewritten, so state can be rebuilt from the selected branch if an extension rollback discards the newer sidecar store.
+
+## Narrative time and lifecycle
+
+`scene.date` and `scene.time` remain the only current-clock fields. The tracker treats them exclusively as fictional narrative time: completed public dialogue and action may advance them, explicit durations and clock references take priority, approximate wording remains approximate, and real message timestamps, user response delay, and generation latency are ignored. Observation, analysis, reload, and reprocessing do not advance fictional time.
+
+Scene lifecycle and arc lifecycle are separate replacement-state fields. The current scene may be ended while the larger arc remains active because a later meeting or continuing connection exists. Starting a later scene replaces the prior current scene and marks the new scene active; it does not append a scene-history item. Prior versions remain available through branch checkpoints and the public transcript.
 
 ## Update transaction
 
@@ -40,7 +46,9 @@ The companion card exposes stable checking, live-engine, and manual-fallback hoo
 
 The Continuity drawer uses Lumiverse host-mounted switches, selects, numeric inputs, badges, and checkboxes when the shared component bridge is available. Advanced and private sections use persistent theme-matched HTML details because Lumiverse's mounted collapsible removes its body while closed, which would destroy nested component mounts. Action buttons use Lumiverse theme tokens because the host does not expose a general mounted button. If any required shared form component is unavailable, the drawer falls back as one complete set to themed HTML controls instead of mixing two visual systems.
 
-Every status payload also contains a deliberately narrow public projection for the drawer. It includes observable scene facts, the woman's stable visible face/eyes/skin/body traits and temporary appearance/state, established relationship status, latest public change, and public NPC fields. Mental state, boundaries, objectives, NPC intentions, the complete private response vector, and source-message identifiers never enter this projection. The complete canonical JSON is returned only after the user enables private-state inspection.
+When enabled, a native `ui_panels` float widget provides an ambient frontend-only projection of the same public status payload. It reuses the drawer's Continuity icon, appears only for chats with a detected Date Simulator profile, opens the existing drawer when clicked, and uses color plus reduced-motion-aware pulses for updating, committed, and attention states. A short processing debounce suppresses flashes from no-change verification passes, and a completion pulse is shown only when the committed revision increases. Disabling the preference destroys the widget; missing or revoked UI-panel capability leaves tracking unchanged and reports the widget as unavailable in the drawer.
+
+Every status payload also contains a deliberately narrow public projection for the drawer. It includes scene and arc lifecycle status without their reasons or sources, observable scene facts, the woman's stable visible face/eyes/skin/body traits and temporary appearance/state, the man's structured visible state, structured positions/contact/items, established relationship status, latest public change, and public NPC fields. Mental state, lifecycle reasons, boundaries, objectives, NPC intentions, the complete private response vector, and source-message identifiers never enter this projection. The complete canonical JSON is returned only after the user enables private-state inspection.
 
 ## Migration
 

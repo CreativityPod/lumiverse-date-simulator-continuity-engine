@@ -1,4 +1,9 @@
-import { TRACKER_SCHEMA_VERSION, cloneEmptyState, upgradeTrackerState } from "./schemas.js";
+import {
+  TRACKER_SCHEMA_VERSION,
+  cloneEmptyState,
+  trackerSourceMessageIds,
+  upgradeTrackerState,
+} from "./schemas.js";
 
 export const CHAT_KEYS = Object.freeze({
   case: "date_simulator.case",
@@ -439,20 +444,14 @@ export function normalizeStore(value, chatId) {
   };
   if (result.current) {
     const validated = upgradeTrackerState(result.current, {
-      allowedSourceMessageIds: [
-        result.current.arc?.relationship?.sourceMessageId,
-        result.current.arc?.response?.sourceMessageId,
-      ].filter(Boolean),
+      allowedSourceMessageIds: trackerSourceMessageIds(result.current),
     });
     result.current = validated;
   }
   result.checkpoints = Object.fromEntries(
     Object.entries(result.checkpoints).flatMap(([key, checkpoint]) => {
       const state = upgradeTrackerState(checkpoint?.state, {
-        allowedSourceMessageIds: [
-          checkpoint?.state?.arc?.relationship?.sourceMessageId,
-          checkpoint?.state?.arc?.response?.sourceMessageId,
-        ].filter(Boolean),
+        allowedSourceMessageIds: trackerSourceMessageIds(checkpoint?.state),
       });
       return state ? [[key, { ...checkpoint, state }]] : [];
     }),
@@ -464,10 +463,7 @@ export function selectCheckpoint(store, turn) {
   const checkpoint = store?.checkpoints?.[turn.key];
   if (!checkpoint || checkpoint.fingerprint !== turn.fingerprint) return null;
   const state = upgradeTrackerState(checkpoint.state, {
-    allowedSourceMessageIds: [
-      checkpoint.state?.arc?.relationship?.sourceMessageId,
-      checkpoint.state?.arc?.response?.sourceMessageId,
-    ].filter(Boolean),
+    allowedSourceMessageIds: trackerSourceMessageIds(checkpoint.state),
   });
   return state ? { ...checkpoint, state } : null;
 }

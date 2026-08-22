@@ -24,7 +24,10 @@ test("tracker prompt contains the source id and agency constraints", () => {
   assert.match(trackerTest.systemPrompt, /Consent is action-specific/);
   assert.match(trackerTest.systemPrompt, /womanStable/);
   assert.match(trackerTest.systemPrompt, /Never use numbers, points, percentages/);
-  assert.match(trackerTest.systemPrompt, /"objectives":\[\{"owner":"string","objective":"string","status":"string"\}\]/);
+  assert.match(trackerTest.systemPrompt, /fictional narrative clock, never wall-clock time/);
+  assert.match(trackerTest.systemPrompt, /how long the user waited in real life/);
+  assert.match(trackerTest.systemPrompt, /"lifecycle":\{"status":"active or ended"/);
+  assert.match(trackerTest.systemPrompt, /"timing":"string","sourceMessageId":"matching id or empty"/);
 });
 
 test("tracker timeout fits inside the five-minute interceptor budget", () => {
@@ -69,7 +72,7 @@ test("retries one rejected tracker response with the validation reason", async (
       quiet: async (input) => {
         requests.push(input);
         return requests.length === 1
-          ? { content: '{"schemaVersion":3}', finish_reason: "stop" }
+          ? { content: '{"schemaVersion":4}', finish_reason: "stop" }
           : { content: JSON.stringify(state), finish_reason: "stop" };
       },
     },
@@ -90,7 +93,7 @@ test("retries one rejected tracker response with the validation reason", async (
   assert.equal(requests.length, 2);
   assert.match(requests[1].messages.at(-1).content, /scene must be an object/);
   assert.equal(requests[1].messages.at(-2).role, "assistant");
-  assert.equal(requests[1].messages.at(-2).content, '{"schemaVersion":3}');
+  assert.equal(requests[1].messages.at(-2).content, '{"schemaVersion":4}');
 });
 
 test("repairs a structurally empty state instead of treating defaults as an update", async () => {
@@ -103,7 +106,7 @@ test("repairs a structurally empty state instead of treating defaults as an upda
       quiet: async (input) => {
         requests.push(input);
         return requests.length === 1
-          ? { content: '{"schemaVersion":3,"scene":{},"arc":{}}', finish_reason: "stop" }
+          ? { content: '{"schemaVersion":4,"scene":{},"arc":{}}', finish_reason: "stop" }
           : { content: JSON.stringify(state), finish_reason: "stop" };
       },
     },
@@ -127,7 +130,13 @@ test("repairs a structurally empty state instead of treating defaults as an upda
 
 test("accepts a conservative objective fallback without a second model call", async () => {
   const previousState = cloneEmptyState();
-  previousState.arc.objectives = [{ owner: "Elena", objective: "Confirm dinner.", status: "active" }];
+  previousState.arc.objectives = [{
+    owner: "Elena",
+    objective: "Confirm dinner.",
+    status: "active",
+    timing: "Before tonight ends.",
+    sourceMessageId: "",
+  }];
   const candidate = structuredClone(previousState);
   candidate.scene.time = "8:15 PM";
   candidate.arc.objectives[0].status = "";
@@ -202,7 +211,7 @@ test("accepts a forced Anthropic tracker tool call", async () => {
         assert.equal(input.parameters.tool_choice.name, "record_date_simulator_state");
         assert.equal(input.tools[0].name, "record_date_simulator_state");
         assert.equal(input.tools[0].parameters.type, "object");
-        assert.match(input.messages[0].content, /manVisible contains only/);
+        assert.match(input.messages[0].content, /manVisible separates/);
         return {
           content: "",
           tool_calls: [{ name: "record_date_simulator_state", args: state }],

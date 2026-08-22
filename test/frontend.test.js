@@ -2,11 +2,135 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  bindDragSafeClick,
+  CONTINUITY_ICON_SVG,
   cardsInside,
   formatLocalTimestamp,
   privateStatePresentation,
   profileCardPresentation,
+  resolveStatusWidgetPreference,
+  statusWidgetPresentation,
 } from "../src/frontend.js";
+
+function pointerEvent(type, { pointerId = 1, clientX = 0, clientY = 0 } = {}) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    pointerId: { value: pointerId },
+    clientX: { value: clientX },
+    clientY: { value: clientY },
+    isPrimary: { value: true },
+  });
+  return event;
+}
+
+test("reuses the Continuity tab icon for the floating status widget", () => {
+  assert.match(CONTINUITY_ICON_SVG, /M4 12a8 8 0 1 0 3-6\.2/);
+  assert.match(CONTINUITY_ICON_SVG, /M12 8v4l3 2/);
+});
+
+test("opens the Continuity tab on a click but not after dragging the widget", () => {
+  const button = new EventTarget();
+  const pointerTarget = new EventTarget();
+  const scheduled = [];
+  let activations = 0;
+  const interaction = bindDragSafeClick(button, pointerTarget, () => {
+    activations += 1;
+  }, {
+    schedule(callback) {
+      scheduled.push(callback);
+      return scheduled.length;
+    },
+    cancelSchedule() {},
+  });
+
+  button.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+  pointerTarget.dispatchEvent(pointerEvent("pointerup", { clientX: 10, clientY: 10 }));
+  button.dispatchEvent(new Event("click", { cancelable: true }));
+  assert.equal(activations, 1);
+
+  button.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+  pointerTarget.dispatchEvent(pointerEvent("pointermove", { clientX: 19, clientY: 10 }));
+  pointerTarget.dispatchEvent(pointerEvent("pointerup", { clientX: 19, clientY: 10 }));
+  const dragClick = new Event("click", { cancelable: true });
+  assert.equal(button.dispatchEvent(dragClick), false);
+  assert.equal(activations, 1);
+
+  interaction.markDragged();
+  const nativeDragClick = new Event("click", { cancelable: true });
+  assert.equal(button.dispatchEvent(nativeDragClick), false);
+  assert.equal(activations, 1);
+
+  interaction.destroy();
+});
+
+test("presents contextual floating-widget states without exposing private data", () => {
+  assert.deepEqual(statusWidgetPresentation(null), {
+    visible: false,
+    state: "inactive",
+    label: "No active Date Simulator profile.",
+  });
+  assert.deepEqual(statusWidgetPresentation({ chatId: "other", code: "ready_no_profile" }), {
+    visible: false,
+    state: "inactive",
+    label: "No active Date Simulator profile.",
+  });
+
+  assert.deepEqual(statusWidgetPresentation({
+    chatId: "chat-1",
+    caseMessageId: "case-1",
+    profileSaved: true,
+    processing: true,
+    revision: 4,
+  }), {
+    visible: true,
+    state: "updating",
+    label: "Updating scene and arc continuity…",
+  });
+
+  assert.deepEqual(statusWidgetPresentation({
+    chatId: "chat-1",
+    caseMessageId: "case-1",
+    profileSaved: true,
+    code: "ready",
+    level: "green",
+    revision: 5,
+  }, true), {
+    visible: true,
+    state: "complete",
+    label: "Continuity updated · Revision 5.",
+  });
+
+  const warning = statusWidgetPresentation({
+    chatId: "chat-1",
+    caseMessageId: "case-1",
+    profileSaved: true,
+    code: "error",
+    level: "amber",
+    text: "Continuity Engine kept the last valid state.",
+    state: { private: "must not appear" },
+  });
+  assert.equal(warning.visible, true);
+  assert.equal(warning.state, "attention");
+  assert.equal(warning.label, "Continuity Engine kept the last valid state.");
+  assert.doesNotMatch(warning.label, /must not appear/);
+});
+
+test("keeps a pending widget preference authoritative until persistence is confirmed", () => {
+  const staleEnabledStatus = {
+    chatId: "chat-1",
+    config: { enabled: true, showStatusWidget: true },
+  };
+  const pendingOff = resolveStatusWidgetPreference(staleEnabledStatus, false);
+  assert.equal(pendingOff.status.config.showStatusWidget, false);
+  assert.equal(pendingOff.pendingPreference, false);
+
+  const confirmedOff = resolveStatusWidgetPreference({
+    ...staleEnabledStatus,
+    config: { ...staleEnabledStatus.config, showStatusWidget: false },
+  }, false);
+  assert.equal(confirmedOff.status.config.showStatusWidget, false);
+  assert.equal(confirmedOff.pendingPreference, null);
+});
 
 test("formats tracker timestamps in the requested local time zone", () => {
   assert.equal(
