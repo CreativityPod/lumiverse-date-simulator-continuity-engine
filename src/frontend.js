@@ -8,6 +8,87 @@ const OUTPUT_MODE_OPTIONS = [
   { value: "plain", label: "Plain JSON" },
 ];
 
+export function bindDragSafeClick(target, pointerTarget, action, options = {}) {
+  const movementThreshold = Math.max(0, Number(options.movementThreshold) || 6);
+  const schedule = options.schedule ?? ((callback) => setTimeout(callback, 0));
+  const cancelSchedule = options.cancelSchedule ?? clearTimeout;
+  let pointerStart = null;
+  let dragged = false;
+  let resetTimer = null;
+
+  const reset = () => {
+    pointerStart = null;
+    dragged = false;
+    if (resetTimer !== null) {
+      cancelSchedule(resetTimer);
+      resetTimer = null;
+    }
+  };
+  const scheduleReset = () => {
+    if (resetTimer !== null) cancelSchedule(resetTimer);
+    resetTimer = schedule(() => {
+      resetTimer = null;
+      pointerStart = null;
+      dragged = false;
+    });
+  };
+  const markDragged = () => {
+    dragged = true;
+    scheduleReset();
+  };
+  const onPointerDown = (event) => {
+    if (event.isPrimary === false) return;
+    reset();
+    pointerStart = {
+      id: event.pointerId,
+      x: Number(event.clientX) || 0,
+      y: Number(event.clientY) || 0,
+    };
+  };
+  const onPointerMove = (event) => {
+    if (!pointerStart || event.pointerId !== pointerStart.id) return;
+    const dx = (Number(event.clientX) || 0) - pointerStart.x;
+    const dy = (Number(event.clientY) || 0) - pointerStart.y;
+    if ((dx * dx) + (dy * dy) >= movementThreshold * movementThreshold) dragged = true;
+  };
+  const onPointerUp = (event) => {
+    if (!pointerStart || event.pointerId !== pointerStart.id) return;
+    scheduleReset();
+  };
+  const onPointerCancel = (event) => {
+    if (!pointerStart || event.pointerId !== pointerStart.id) return;
+    reset();
+  };
+  const onClick = (event) => {
+    if (dragged) {
+      event.preventDefault();
+      event.stopPropagation();
+      reset();
+      return;
+    }
+    reset();
+    action(event);
+  };
+
+  target.addEventListener("pointerdown", onPointerDown);
+  target.addEventListener("click", onClick);
+  pointerTarget.addEventListener("pointermove", onPointerMove, true);
+  pointerTarget.addEventListener("pointerup", onPointerUp, true);
+  pointerTarget.addEventListener("pointercancel", onPointerCancel, true);
+
+  return {
+    markDragged,
+    destroy() {
+      reset();
+      target.removeEventListener("pointerdown", onPointerDown);
+      target.removeEventListener("click", onClick);
+      pointerTarget.removeEventListener("pointermove", onPointerMove, true);
+      pointerTarget.removeEventListener("pointerup", onPointerUp, true);
+      pointerTarget.removeEventListener("pointercancel", onPointerCancel, true);
+    },
+  };
+}
+
 export function statusWidgetPresentation(status, completed = false) {
   const revision = Number.isFinite(Number(status?.revision)) ? Number(status.revision) : 0;
   const relevant = Boolean(status?.chatId && (status?.caseMessageId || status?.profileSaved));
@@ -247,6 +328,7 @@ export function setup(ctx) {
   let cardSyncQueued = false;
   let statusWidget = null;
   let statusWidgetButton = null;
+  let statusWidgetInteractionCleanup = null;
   let statusWidgetProcessingTimer = null;
   let statusWidgetCompleteTimer = null;
   const statusWidgetRevisionByChat = new Map();
@@ -297,28 +379,30 @@ export function setup(ctx) {
     .dsc-snapshot-list dt { color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); font-size: .7rem; }
     .dsc-snapshot-list dd { min-width: 0; margin: 0; color: var(--lumiverse-text-muted); font-size: .74rem; line-height: 1.4; overflow-wrap: anywhere; }
     .dsc-npc-list { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--lumiverse-text-muted); font-size: .74rem; line-height: 1.4; }
-    .dsc-floating-status { position: relative; box-sizing: border-box; width: 100%; height: 100%; display: grid; place-items: center; padding: 0; border: 1px solid var(--lumiverse-border); border-radius: 50%; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); box-shadow: 0 6px 18px rgba(0, 0, 0, .22); cursor: pointer; transition: color .18s ease, border-color .18s ease, background-color .18s ease, box-shadow .18s ease, transform .18s ease; }
-    .dsc-floating-status:hover { transform: scale(1.05); background: var(--lumiverse-fill); }
-    .dsc-floating-status:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 3px; }
+    .dsc-floating-status { position: relative; box-sizing: border-box; width: 100%; height: 100%; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); box-shadow: none; cursor: pointer; transition: color .18s ease, transform .18s ease; }
+    .dsc-floating-status:hover { transform: scale(1.08); background: transparent; }
+    .dsc-floating-status:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 2px; }
     .dsc-floating-status svg { width: 25px; height: 25px; display: block; }
-    .dsc-floating-status[data-state="ready"] { color: var(--lumiverse-success, #86af92); border-color: currentColor; }
-    .dsc-floating-status[data-state="updating"] { color: var(--lumiverse-info, #4fb3ad); border-color: currentColor; animation: dsc-continuity-breathe 1.2s ease-in-out infinite; }
-    .dsc-floating-status[data-state="complete"] { color: var(--lumiverse-success, #86af92); border-color: currentColor; animation: dsc-continuity-complete .65s ease-out 2; }
-    .dsc-floating-status[data-state="attention"] { color: var(--lumiverse-warning, #c89b62); border-color: currentColor; }
-    .dsc-floating-status-alert { position: absolute; right: -2px; bottom: -2px; box-sizing: border-box; width: 18px; height: 18px; display: none; place-items: center; border: 2px solid var(--lumiverse-fill, #1b1b1b); border-radius: 50%; background: var(--lumiverse-warning, #c89b62); color: #1b1b1b; font-size: 12px; font-weight: 800; line-height: 1; }
+    .dsc-floating-status[data-state="ready"] { color: var(--lumiverse-success, #86af92); }
+    .dsc-floating-status[data-state="updating"] { color: var(--lumiverse-info, #4fb3ad); }
+    .dsc-floating-status[data-state="complete"] { color: var(--lumiverse-success, #86af92); }
+    .dsc-floating-status[data-state="attention"] { color: var(--lumiverse-warning, #c89b62); }
+    .dsc-floating-status[data-state="updating"] svg { animation: dsc-continuity-breathe 1.2s ease-in-out infinite; }
+    .dsc-floating-status[data-state="complete"] svg { animation: dsc-continuity-complete .65s ease-out 2; }
+    .dsc-floating-status-alert { position: absolute; top: 6px; right: 7px; display: none; border: 0; border-radius: 0; background: transparent; color: var(--lumiverse-warning, #c89b62); font-size: 14px; font-weight: 800; line-height: 1; pointer-events: none; }
     .dsc-floating-status[data-state="attention"] .dsc-floating-status-alert { display: grid; }
     @keyframes dsc-continuity-breathe {
-      0%, 100% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 0 rgba(79, 179, 173, .12); }
-      50% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 8px rgba(79, 179, 173, .28); }
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .48; transform: scale(.92); }
     }
     @keyframes dsc-continuity-complete {
-      0% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 0 rgba(134, 175, 146, .35); }
-      100% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 10px rgba(134, 175, 146, 0); }
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .72; transform: scale(1.12); }
     }
     @media (prefers-reduced-motion: reduce) {
       .dsc-floating-status { transition: none; }
-      .dsc-floating-status[data-state="updating"],
-      .dsc-floating-status[data-state="complete"] { animation: none; }
+      .dsc-floating-status[data-state="updating"] svg,
+      .dsc-floating-status[data-state="complete"] svg { animation: none; }
     }
     .ds-state-card .ds-engine-checking, .ds-state-card .ds-engine-missing { display: none !important; }
     .ds-state-card .ds-engine-live { display: inline !important; }
@@ -1000,6 +1084,10 @@ export function setup(ctx) {
 
   function destroyStatusWidget() {
     clearStatusWidgetTimers();
+    if (statusWidgetInteractionCleanup) {
+      statusWidgetInteractionCleanup();
+      statusWidgetInteractionCleanup = null;
+    }
     statusWidgetButton = null;
     if (!statusWidget) return;
     try { statusWidget.destroy(); } catch { /* permission revocation may retire it first */ }
@@ -1035,12 +1123,24 @@ export function setup(ctx) {
       button.innerHTML = `${CONTINUITY_ICON_SVG}<span class="dsc-floating-status-alert" aria-hidden="true">!</span>`;
       button.setAttribute("aria-label", "Date Simulator Continuity");
       button.title = "Date Simulator Continuity";
-      button.addEventListener("click", () => tab.activate());
+      const interaction = bindDragSafeClick(button, window, () => tab.activate());
+      let stopDragEnd = null;
+      statusWidgetInteractionCleanup = () => {
+        interaction.destroy();
+        if (typeof stopDragEnd === "function") stopDragEnd();
+      };
+      if (typeof statusWidget.onDragEnd === "function") {
+        stopDragEnd = statusWidget.onDragEnd(() => interaction.markDragged());
+      }
       statusWidget.root.replaceChildren(button);
       statusWidgetButton = button;
       updateStatusWidgetHint();
       return true;
     } catch {
+      if (statusWidgetInteractionCleanup) {
+        statusWidgetInteractionCleanup();
+        statusWidgetInteractionCleanup = null;
+      }
       statusWidget = null;
       statusWidgetButton = null;
       updateStatusWidgetHint(
