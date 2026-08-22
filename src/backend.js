@@ -112,6 +112,11 @@ async function saveConfig(value) {
   return config;
 }
 
+async function saveWidgetVisibility(showStatusWidget) {
+  const current = await loadConfig();
+  return saveConfig({ ...current, showStatusWidget });
+}
+
 function safeChatToken(chatId) {
   return String(chatId ?? "unknown").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 180);
 }
@@ -729,6 +734,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
     sendFrontend({ type: "continuity_config_saved", config }, userId);
     const chatId = adoptActiveChat(payload.chatId, userId);
     if (chatId) scheduleReconcile(chatId, {}, userId);
+  } else if (
+    type === "continuity_set_widget_visibility"
+    && typeof payload.showStatusWidget === "boolean"
+  ) {
+    const config = await saveWidgetVisibility(payload.showStatusWidget);
+    sendFrontend({ type: "continuity_config_saved", config }, userId);
+    const chatId = adoptActiveChat(payload.chatId, userId);
+    if (chatId) publishStatus(chatId, {}, userId);
   } else if (type === "continuity_reprocess") {
     const chatId = adoptActiveChat(payload.chatId, userId);
     if (!chatId) {

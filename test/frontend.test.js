@@ -8,6 +8,7 @@ import {
   formatLocalTimestamp,
   privateStatePresentation,
   profileCardPresentation,
+  resolveStatusWidgetPreference,
   statusWidgetPresentation,
 } from "../src/frontend.js";
 
@@ -112,6 +113,23 @@ test("presents contextual floating-widget states without exposing private data",
   assert.equal(warning.state, "attention");
   assert.equal(warning.label, "Continuity Engine kept the last valid state.");
   assert.doesNotMatch(warning.label, /must not appear/);
+});
+
+test("keeps a pending widget preference authoritative until persistence is confirmed", () => {
+  const staleEnabledStatus = {
+    chatId: "chat-1",
+    config: { enabled: true, showStatusWidget: true },
+  };
+  const pendingOff = resolveStatusWidgetPreference(staleEnabledStatus, false);
+  assert.equal(pendingOff.status.config.showStatusWidget, false);
+  assert.equal(pendingOff.pendingPreference, false);
+
+  const confirmedOff = resolveStatusWidgetPreference({
+    ...staleEnabledStatus,
+    config: { ...staleEnabledStatus.config, showStatusWidget: false },
+  }, false);
+  assert.equal(confirmedOff.status.config.showStatusWidget, false);
+  assert.equal(confirmedOff.pendingPreference, null);
 });
 
 test("formats tracker timestamps in the requested local time zone", () => {

@@ -56,7 +56,8 @@ check(frontend.includes("frontend detected, but the backend did not confirm"), "
 check(frontend.includes("dsc-fallback-control"), "Frontend retains a themed compatibility fallback");
 check(frontend.includes("createFloatWidget"), "Frontend creates the optional native floating status widget");
 check(frontend.includes("CONTINUITY_ICON_SVG"), "Frontend reuses one Continuity icon for the tab and widget");
-check(frontend.includes("Show floating continuity status"), "Frontend exposes the floating-widget preference");
+check(frontend.includes("Show Widget"), "Frontend exposes the floating-widget preference");
+check(frontend.includes("continuity_set_widget_visibility"), "Frontend persists widget visibility immediately");
 check(backend.includes("showStatusWidget"), "Backend persists the floating-widget preference");
 
 if (failures.length) {

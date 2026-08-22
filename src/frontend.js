@@ -140,6 +140,26 @@ export function statusWidgetPresentation(status, completed = false) {
   };
 }
 
+export function resolveStatusWidgetPreference(status, pendingPreference) {
+  if (typeof pendingPreference !== "boolean") {
+    return { status, pendingPreference: null };
+  }
+  const savedPreference = status?.config?.showStatusWidget !== false;
+  if (savedPreference === pendingPreference) {
+    return { status, pendingPreference: null };
+  }
+  return {
+    status: {
+      ...status,
+      config: {
+        ...(status?.config ?? {}),
+        showStatusWidget: pendingPreference,
+      },
+    },
+    pendingPreference,
+  };
+}
+
 export function profileCardPresentation(status) {
   const profileSaved = status?.profileSaved === true;
   const code = typeof status?.code === "string" ? status.code : "unknown";
@@ -329,6 +349,7 @@ export function setup(ctx) {
   let statusWidget = null;
   let statusWidgetButton = null;
   let statusWidgetInteractionCleanup = null;
+  let pendingStatusWidgetPreference = null;
   let statusWidgetProcessingTimer = null;
   let statusWidgetCompleteTimer = null;
   const statusWidgetRevisionByChat = new Map();
@@ -504,7 +525,7 @@ export function setup(ctx) {
     statusWidgetCopy.className = "dsc-toggle-copy";
     const statusWidgetLabel = document.createElement("div");
     statusWidgetLabel.className = "dsc-label";
-    statusWidgetLabel.textContent = "Show floating continuity status";
+    statusWidgetLabel.textContent = "Show Widget";
     const statusWidgetHint = document.createElement("div");
     statusWidgetHint.className = "dsc-hint";
     statusWidgetHint.textContent = "Show a draggable status icon in active Date Simulator chats.";
@@ -542,7 +563,8 @@ export function setup(ctx) {
     const showStatusWidget = ctx.components.mountSwitch(statusWidgetSlot, {
       checked: true,
       size: "md",
-      ariaLabel: "Show floating continuity status",
+      ariaLabel: "Show Widget",
+      onChange: setStatusWidgetVisibility,
     });
     mountedComponents.push(showStatusWidget);
     const connection = ctx.components.mountSelect(connectionField.slot, {
@@ -643,8 +665,11 @@ export function setup(ctx) {
     const showStatusWidget = document.createElement("input");
     showStatusWidget.type = "checkbox";
     const statusWidgetText = document.createElement("span");
-    statusWidgetText.textContent = "Show floating continuity status";
+    statusWidgetText.textContent = "Show Widget";
     statusWidgetLabel.append(showStatusWidget, statusWidgetText);
+    showStatusWidget.addEventListener("change", () => {
+      setStatusWidgetVisibility(showStatusWidget.checked);
+    });
     const statusWidgetHint = document.createElement("div");
     statusWidgetHint.className = "dsc-hint";
     statusWidgetHint.textContent = "Show a draggable status icon in active Date Simulator chats.";
@@ -813,6 +838,28 @@ export function setup(ctx) {
     showPrivateState = visible === true;
     renderPrivateState(latestStatus);
     requestStatus();
+  }
+
+  function setStatusWidgetVisibility(visible) {
+    const showWidget = visible === true;
+    pendingStatusWidgetPreference = showWidget;
+    if (latestStatus) {
+      latestStatus = {
+        ...latestStatus,
+        config: {
+          ...(latestStatus.config ?? {}),
+          showStatusWidget: showWidget,
+        },
+      };
+      syncStatusWidget(latestStatus);
+    } else if (!showWidget) {
+      destroyStatusWidget();
+    }
+    ctx.sendToBackend({
+      type: "continuity_set_widget_visibility",
+      chatId: activeChatId,
+      showStatusWidget: showWidget,
+    });
   }
 
   function connectionOptions(selected) {
@@ -1236,6 +1283,12 @@ export function setup(ctx) {
   }
 
   function renderStatus(status) {
+    const resolvedWidgetPreference = resolveStatusWidgetPreference(
+      status,
+      pendingStatusWidgetPreference,
+    );
+    status = resolvedWidgetPreference.status;
+    pendingStatusWidgetPreference = resolvedWidgetPreference.pendingPreference;
     latestStatus = status;
     if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
     statusText.textContent = status.text;

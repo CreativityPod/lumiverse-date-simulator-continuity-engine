@@ -188,6 +188,22 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.ok(frontendMessages.some(
     (payload) => payload.type === "continuity_config_saved" && payload.config.timeoutMs === 120_000,
   ));
+  await frontendHandler({
+    type: "continuity_set_widget_visibility",
+    chatId: "chat-1",
+    showStatusWidget: true,
+  }, "user-1");
+  assert.equal(files.get("config.json").showStatusWidget, true);
+  assert.equal(files.get("config.json").outputMode, "plain");
+  await frontendHandler({
+    type: "continuity_set_widget_visibility",
+    chatId: "chat-1",
+    showStatusWidget: false,
+  }, "user-1");
+  assert.equal(files.get("config.json").showStatusWidget, false);
+  assert.equal(files.get("config.json").outputMode, "plain");
+  await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
+  assert.equal(frontendMessages.at(-1).config.showStatusWidget, false);
 
   await events.get("MESSAGE_SENT")({ chatId: "chat-1", message: opening }, "user-1");
 
