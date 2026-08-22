@@ -2,11 +2,70 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CONTINUITY_ICON_SVG,
   cardsInside,
   formatLocalTimestamp,
   privateStatePresentation,
   profileCardPresentation,
+  statusWidgetPresentation,
 } from "../src/frontend.js";
+
+test("reuses the Continuity tab icon for the floating status widget", () => {
+  assert.match(CONTINUITY_ICON_SVG, /M4 12a8 8 0 1 0 3-6\.2/);
+  assert.match(CONTINUITY_ICON_SVG, /M12 8v4l3 2/);
+});
+
+test("presents contextual floating-widget states without exposing private data", () => {
+  assert.deepEqual(statusWidgetPresentation(null), {
+    visible: false,
+    state: "inactive",
+    label: "No active Date Simulator profile.",
+  });
+  assert.deepEqual(statusWidgetPresentation({ chatId: "other", code: "ready_no_profile" }), {
+    visible: false,
+    state: "inactive",
+    label: "No active Date Simulator profile.",
+  });
+
+  assert.deepEqual(statusWidgetPresentation({
+    chatId: "chat-1",
+    caseMessageId: "case-1",
+    profileSaved: true,
+    processing: true,
+    revision: 4,
+  }), {
+    visible: true,
+    state: "updating",
+    label: "Updating scene and arc continuity…",
+  });
+
+  assert.deepEqual(statusWidgetPresentation({
+    chatId: "chat-1",
+    caseMessageId: "case-1",
+    profileSaved: true,
+    code: "ready",
+    level: "green",
+    revision: 5,
+  }, true), {
+    visible: true,
+    state: "complete",
+    label: "Continuity updated · Revision 5.",
+  });
+
+  const warning = statusWidgetPresentation({
+    chatId: "chat-1",
+    caseMessageId: "case-1",
+    profileSaved: true,
+    code: "error",
+    level: "amber",
+    text: "Continuity Engine kept the last valid state.",
+    state: { private: "must not appear" },
+  });
+  assert.equal(warning.visible, true);
+  assert.equal(warning.state, "attention");
+  assert.equal(warning.label, "Continuity Engine kept the last valid state.");
+  assert.doesNotMatch(warning.label, /must not appear/);
+});
 
 test("formats tracker timestamps in the requested local time zone", () => {
   assert.equal(

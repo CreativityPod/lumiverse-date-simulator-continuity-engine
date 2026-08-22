@@ -1,11 +1,63 @@
 const PROFILE_CARD_SELECTOR = ".ds-state-card[data-ds-profile-card='true']";
 const PROFILE_BUTTON_SELECTOR = ".ds-state-button[data-regex-action='date-sim-save-case']";
+export const CONTINUITY_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v6h6"/><path d="M12 8v4l3 2"/></svg>';
 const OUTPUT_MODE_OPTIONS = [
   { value: "auto", label: "Auto detect from connection" },
   { value: "openai", label: "OpenAI-compatible JSON Schema" },
   { value: "anthropic", label: "Anthropic forced tool" },
   { value: "plain", label: "Plain JSON" },
 ];
+
+export function statusWidgetPresentation(status, completed = false) {
+  const revision = Number.isFinite(Number(status?.revision)) ? Number(status.revision) : 0;
+  const relevant = Boolean(status?.chatId && (status?.caseMessageId || status?.profileSaved));
+  if (!relevant) {
+    return {
+      visible: false,
+      state: "inactive",
+      label: "No active Date Simulator profile.",
+    };
+  }
+
+  if (status?.processing === true || status?.code === "profile_saving") {
+    return {
+      visible: true,
+      state: "updating",
+      label: status?.processing
+        ? "Updating scene and arc continuity…"
+        : "Saving the private profile…",
+    };
+  }
+
+  if (
+    status?.level === "amber"
+    || ["disabled", "permissions", "error", "invalid_profile", "migration_required", "recovered"].includes(status?.code)
+  ) {
+    return {
+      visible: true,
+      state: "attention",
+      label: typeof status?.text === "string" && status.text
+        ? status.text
+        : "Continuity needs attention.",
+    };
+  }
+
+  if (completed) {
+    return {
+      visible: true,
+      state: "complete",
+      label: `Continuity updated · Revision ${revision}.`,
+    };
+  }
+
+  return {
+    visible: true,
+    state: "ready",
+    label: revision > 0
+      ? `Continuity current · Revision ${revision}.`
+      : "Continuity ready.",
+  };
+}
 
 export function profileCardPresentation(status) {
   const profileSaved = status?.profileSaved === true;
@@ -193,6 +245,11 @@ export function setup(ctx) {
   let showPrivateState = false;
   let privateStateCache = null;
   let cardSyncQueued = false;
+  let statusWidget = null;
+  let statusWidgetButton = null;
+  let statusWidgetProcessingTimer = null;
+  let statusWidgetCompleteTimer = null;
+  const statusWidgetRevisionByChat = new Map();
   const cardWatchdogs = new WeakMap();
   const watchdogTimers = new Set();
 
@@ -240,6 +297,29 @@ export function setup(ctx) {
     .dsc-snapshot-list dt { color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); font-size: .7rem; }
     .dsc-snapshot-list dd { min-width: 0; margin: 0; color: var(--lumiverse-text-muted); font-size: .74rem; line-height: 1.4; overflow-wrap: anywhere; }
     .dsc-npc-list { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--lumiverse-text-muted); font-size: .74rem; line-height: 1.4; }
+    .dsc-floating-status { position: relative; box-sizing: border-box; width: 100%; height: 100%; display: grid; place-items: center; padding: 0; border: 1px solid var(--lumiverse-border); border-radius: 50%; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text-dim, var(--lumiverse-text-muted)); box-shadow: 0 6px 18px rgba(0, 0, 0, .22); cursor: pointer; transition: color .18s ease, border-color .18s ease, background-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+    .dsc-floating-status:hover { transform: scale(1.05); background: var(--lumiverse-fill); }
+    .dsc-floating-status:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 3px; }
+    .dsc-floating-status svg { width: 25px; height: 25px; display: block; }
+    .dsc-floating-status[data-state="ready"] { color: var(--lumiverse-success, #86af92); border-color: currentColor; }
+    .dsc-floating-status[data-state="updating"] { color: var(--lumiverse-info, #4fb3ad); border-color: currentColor; animation: dsc-continuity-breathe 1.2s ease-in-out infinite; }
+    .dsc-floating-status[data-state="complete"] { color: var(--lumiverse-success, #86af92); border-color: currentColor; animation: dsc-continuity-complete .65s ease-out 2; }
+    .dsc-floating-status[data-state="attention"] { color: var(--lumiverse-warning, #c89b62); border-color: currentColor; }
+    .dsc-floating-status-alert { position: absolute; right: -2px; bottom: -2px; box-sizing: border-box; width: 18px; height: 18px; display: none; place-items: center; border: 2px solid var(--lumiverse-fill, #1b1b1b); border-radius: 50%; background: var(--lumiverse-warning, #c89b62); color: #1b1b1b; font-size: 12px; font-weight: 800; line-height: 1; }
+    .dsc-floating-status[data-state="attention"] .dsc-floating-status-alert { display: grid; }
+    @keyframes dsc-continuity-breathe {
+      0%, 100% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 0 rgba(79, 179, 173, .12); }
+      50% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 8px rgba(79, 179, 173, .28); }
+    }
+    @keyframes dsc-continuity-complete {
+      0% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 0 rgba(134, 175, 146, .35); }
+      100% { box-shadow: 0 6px 18px rgba(0, 0, 0, .22), 0 0 0 10px rgba(134, 175, 146, 0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dsc-floating-status { transition: none; }
+      .dsc-floating-status[data-state="updating"],
+      .dsc-floating-status[data-state="complete"] { animation: none; }
+    }
     .ds-state-card .ds-engine-checking, .ds-state-card .ds-engine-missing { display: none !important; }
     .ds-state-card .ds-engine-live { display: inline !important; }
     .ds-state-card ${PROFILE_BUTTON_SELECTOR} { display: none !important; animation: none !important; }
@@ -258,7 +338,7 @@ export function setup(ctx) {
     headerTitle: "Continuity",
     description: "Configure and inspect Date Simulator scene and arc tracking",
     keywords: ["date simulator", "tracker", "scene", "arc", "sidecar"],
-    iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v6h6"/><path d="M12 8v4l3 2"/></svg>',
+    iconSvg: CONTINUITY_ICON_SVG,
   });
   cleanups.push(() => tab.destroy());
 
@@ -334,11 +414,26 @@ export function setup(ctx) {
     enabledSlot.className = "dsc-toggle-slot";
     enabledRow.append(enabledCopy, enabledSlot);
 
+    const statusWidgetRow = document.createElement("div");
+    statusWidgetRow.className = "dsc-toggle-row";
+    const statusWidgetCopy = document.createElement("div");
+    statusWidgetCopy.className = "dsc-toggle-copy";
+    const statusWidgetLabel = document.createElement("div");
+    statusWidgetLabel.className = "dsc-label";
+    statusWidgetLabel.textContent = "Show floating continuity status";
+    const statusWidgetHint = document.createElement("div");
+    statusWidgetHint.className = "dsc-hint";
+    statusWidgetHint.textContent = "Show a draggable status icon in active Date Simulator chats.";
+    statusWidgetCopy.append(statusWidgetLabel, statusWidgetHint);
+    const statusWidgetSlot = document.createElement("div");
+    statusWidgetSlot.className = "dsc-toggle-slot";
+    statusWidgetRow.append(statusWidgetCopy, statusWidgetSlot);
+
     const connectionField = createField("Tracker connection");
     const connectionStatus = document.createElement("div");
     connectionStatus.className = "dsc-hint";
     connectionField.field.appendChild(connectionStatus);
-    settingsSection.append(enabledRow, connectionField.field);
+    settingsSection.append(enabledRow, statusWidgetRow, connectionField.field);
 
     // Lumiverse's mounted CollapsibleSection removes its body from the DOM while
     // closed. Persistent details keep child component mounts alive and editable.
@@ -360,6 +455,12 @@ export function setup(ctx) {
       ariaLabel: "Tracking enabled",
     });
     mountedComponents.push(enabled);
+    const showStatusWidget = ctx.components.mountSwitch(statusWidgetSlot, {
+      checked: true,
+      size: "md",
+      ariaLabel: "Show floating continuity status",
+    });
+    mountedComponents.push(showStatusWidget);
     const connection = ctx.components.mountSelect(connectionField.slot, {
       value: "",
       options: [],
@@ -413,6 +514,10 @@ export function setup(ctx) {
         get: () => enabled.getValue(),
         set: (value) => enabled.update({ checked: value }),
       },
+      showStatusWidget: {
+        get: () => showStatusWidget.getValue(),
+        set: (value) => showStatusWidget.update({ checked: value }),
+      },
       connection: {
         get: () => connection.getValue(),
         set: (value) => connection.update({ value }),
@@ -433,6 +538,7 @@ export function setup(ctx) {
       showPrivate: {
         get: () => showPrivateState,
       },
+      statusWidgetHint,
       connectionStatus,
     };
   }
@@ -446,6 +552,20 @@ export function setup(ctx) {
     enabledText.textContent = "Tracking enabled — update continuity after completed immersive turns.";
     enabledRow.append(enabled, enabledText);
 
+    const statusWidgetRow = document.createElement("div");
+    statusWidgetRow.className = "dsc-toggle-copy";
+    const statusWidgetLabel = document.createElement("label");
+    statusWidgetLabel.className = "dsc-fallback-check";
+    const showStatusWidget = document.createElement("input");
+    showStatusWidget.type = "checkbox";
+    const statusWidgetText = document.createElement("span");
+    statusWidgetText.textContent = "Show floating continuity status";
+    statusWidgetLabel.append(showStatusWidget, statusWidgetText);
+    const statusWidgetHint = document.createElement("div");
+    statusWidgetHint.className = "dsc-hint";
+    statusWidgetHint.textContent = "Show a draggable status icon in active Date Simulator chats.";
+    statusWidgetRow.append(statusWidgetLabel, statusWidgetHint);
+
     const connectionField = createField("Tracker connection");
     const connection = document.createElement("select");
     connection.className = "dsc-fallback-control";
@@ -453,7 +573,7 @@ export function setup(ctx) {
     const connectionStatus = document.createElement("div");
     connectionStatus.className = "dsc-hint";
     connectionField.field.appendChild(connectionStatus);
-    settingsSection.append(enabledRow, connectionField.field);
+    settingsSection.append(enabledRow, statusWidgetRow, connectionField.field);
 
     const advanced = createFallbackDetails("Advanced settings", false);
     advancedHost.appendChild(advanced.element);
@@ -514,6 +634,10 @@ export function setup(ctx) {
         get: () => enabled.checked,
         set: (value) => { enabled.checked = value; },
       },
+      showStatusWidget: {
+        get: () => showStatusWidget.checked,
+        set: (value) => { showStatusWidget.checked = value; },
+      },
       connection: {
         get: () => connection.value,
         set: (value) => { connection.value = value; },
@@ -546,6 +670,7 @@ export function setup(ctx) {
       showPrivate: {
         get: () => showPrivateState,
       },
+      statusWidgetHint,
       connectionStatus,
     };
   }
@@ -855,6 +980,161 @@ export function setup(ctx) {
     });
   }
 
+  function updateStatusWidgetHint(message = "", level = "neutral") {
+    const hint = controls?.statusWidgetHint;
+    if (!hint) return;
+    hint.dataset.level = level;
+    hint.textContent = message || "Show a draggable status icon in active Date Simulator chats.";
+  }
+
+  function clearStatusWidgetTimers() {
+    if (statusWidgetProcessingTimer !== null) {
+      clearTimeout(statusWidgetProcessingTimer);
+      statusWidgetProcessingTimer = null;
+    }
+    if (statusWidgetCompleteTimer !== null) {
+      clearTimeout(statusWidgetCompleteTimer);
+      statusWidgetCompleteTimer = null;
+    }
+  }
+
+  function destroyStatusWidget() {
+    clearStatusWidgetTimers();
+    statusWidgetButton = null;
+    if (!statusWidget) return;
+    try { statusWidget.destroy(); } catch { /* permission revocation may retire it first */ }
+    statusWidget = null;
+  }
+
+  function ensureStatusWidget() {
+    if (statusWidget && statusWidgetButton) return true;
+    if (typeof ctx.ui.createFloatWidget !== "function") {
+      updateStatusWidgetHint(
+        "Floating widgets are unavailable in this Lumiverse version.",
+        "amber",
+      );
+      return false;
+    }
+
+    try {
+      statusWidget = ctx.ui.createFloatWidget({
+        width: 48,
+        height: 48,
+        initialPosition: {
+          x: 12,
+          y: Math.max(72, Math.round((window.innerHeight - 48) * 0.42)),
+        },
+        snapToEdge: true,
+        tooltip: "Date Simulator Continuity",
+        chromeless: true,
+      });
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "dsc-floating-status";
+      button.dataset.state = "inactive";
+      button.innerHTML = `${CONTINUITY_ICON_SVG}<span class="dsc-floating-status-alert" aria-hidden="true">!</span>`;
+      button.setAttribute("aria-label", "Date Simulator Continuity");
+      button.title = "Date Simulator Continuity";
+      button.addEventListener("click", () => tab.activate());
+      statusWidget.root.replaceChildren(button);
+      statusWidgetButton = button;
+      updateStatusWidgetHint();
+      return true;
+    } catch {
+      statusWidget = null;
+      statusWidgetButton = null;
+      updateStatusWidgetHint(
+        "Floating widget unavailable. Grant the UI panels permission and reload the extension.",
+        "amber",
+      );
+      return false;
+    }
+  }
+
+  function applyStatusWidgetPresentation(presentation) {
+    if (!presentation.visible) {
+      try { statusWidget?.setVisible(false); } catch { destroyStatusWidget(); }
+      return;
+    }
+    if (!ensureStatusWidget()) return;
+    try {
+      statusWidget.setVisible(true);
+      statusWidgetButton.dataset.state = presentation.state;
+      statusWidgetButton.title = presentation.label;
+      statusWidgetButton.setAttribute("aria-label", presentation.label);
+    } catch {
+      destroyStatusWidget();
+      updateStatusWidgetHint(
+        "Floating widget unavailable. Grant the UI panels permission and reload the extension.",
+        "amber",
+      );
+    }
+  }
+
+  function syncStatusWidget(status) {
+    if (status?.config?.showStatusWidget === false) {
+      destroyStatusWidget();
+      updateStatusWidgetHint();
+      return;
+    }
+
+    const presentation = statusWidgetPresentation(status);
+    if (!presentation.visible) {
+      clearStatusWidgetTimers();
+      applyStatusWidgetPresentation(presentation);
+      return;
+    }
+
+    const chatId = status.chatId;
+    const revision = Number.isFinite(Number(status.revision)) ? Number(status.revision) : 0;
+    const previousRevision = statusWidgetRevisionByChat.get(chatId);
+    if (previousRevision === undefined || revision > previousRevision) {
+      statusWidgetRevisionByChat.set(chatId, revision);
+    }
+
+    if (status.processing === true) {
+      if (statusWidgetCompleteTimer !== null) {
+        clearTimeout(statusWidgetCompleteTimer);
+        statusWidgetCompleteTimer = null;
+      }
+      if (statusWidgetButton?.dataset.state === "updating" || statusWidgetProcessingTimer !== null) {
+        return;
+      }
+      statusWidgetProcessingTimer = setTimeout(() => {
+        statusWidgetProcessingTimer = null;
+        if (
+          latestStatus?.chatId === chatId
+          && latestStatus.processing === true
+          && latestStatus.config?.showStatusWidget !== false
+        ) {
+          applyStatusWidgetPresentation(statusWidgetPresentation(latestStatus));
+        }
+      }, 250);
+      return;
+    }
+
+    if (statusWidgetProcessingTimer !== null) {
+      clearTimeout(statusWidgetProcessingTimer);
+      statusWidgetProcessingTimer = null;
+    }
+    if (statusWidgetCompleteTimer !== null) {
+      clearTimeout(statusWidgetCompleteTimer);
+      statusWidgetCompleteTimer = null;
+    }
+
+    const completed = previousRevision !== undefined && revision > previousRevision;
+    const settled = statusWidgetPresentation(status, completed);
+    applyStatusWidgetPresentation(settled);
+    if (settled.state === "complete") {
+      statusWidgetCompleteTimer = setTimeout(() => {
+        statusWidgetCompleteTimer = null;
+        if (latestStatus?.chatId === chatId && latestStatus.processing !== true) {
+          applyStatusWidgetPresentation(statusWidgetPresentation(latestStatus));
+        }
+      }, 2_600);
+    }
+  }
+
   function renderStatus(status) {
     latestStatus = status;
     if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
@@ -868,6 +1148,7 @@ export function setup(ctx) {
     const badgeColor = status.processing ? "info" : status.level === "green" ? "success" : "warning";
     badgeControl.update({ text: badgeText, color: badgeColor });
     controls.enabled.set(status.config?.enabled !== false);
+    controls.showStatusWidget.set(status.config?.showStatusWidget !== false);
     controls.outputMode.set(status.config?.outputMode ?? "auto");
     controls.maxTokens.set(status.config?.maxTokens ?? 2_000);
     controls.timeout.set(Math.round((status.config?.timeoutMs ?? 30_000) / 1_000));
@@ -876,6 +1157,7 @@ export function setup(ctx) {
     renderPrivateState(status);
     tab.setBadge(status.level === "green" ? null : "!");
     updateProfileCards(status);
+    syncStatusWidget(status);
   }
 
   const saveButton = createButton("Save Settings", () => {
@@ -884,6 +1166,7 @@ export function setup(ctx) {
       chatId: activeChatId,
       config: {
         enabled: controls.enabled.get() === true,
+        showStatusWidget: controls.showStatusWidget.get() === true,
         connectionId: controls.connection.get() ?? "",
         outputMode: controls.outputMode.get() ?? "auto",
         maxTokens: Number(controls.maxTokens.get()),
@@ -978,6 +1261,8 @@ export function setup(ctx) {
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
     latestStatus = null;
     privateStateCache = null;
+    clearStatusWidgetTimers();
+    applyStatusWidgetPresentation(statusWidgetPresentation(null));
     renderPrivateState(null);
     for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
@@ -996,6 +1281,7 @@ export function setup(ctx) {
   ctx.sendToBackend({ type: "continuity_get_connections" });
 
   return () => {
+    destroyStatusWidget();
     for (const handle of mountedComponents.reverse()) {
       try { handle.destroy(); } catch { /* best-effort cleanup */ }
     }

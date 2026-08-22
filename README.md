@@ -14,7 +14,7 @@ For v1.5 Surprise Me setup, it also injects one deterministic branch-stable cast
 ## Install
 
 1. In Lumiverse, install the extension from `https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine`.
-2. Grant `generation`, `interceptor`, and `chat_mutation` permissions.
+2. Grant `generation`, `interceptor`, `chat_mutation`, and `ui_panels` permissions. The first three power continuity tracking; `ui_panels` is used only for the optional floating status widget.
 3. Open the **Continuity** drawer and optionally select a tracker connection and structured-output mode. With no selection, the active default connection and automatic provider detection are used.
 4. Import the companion matching the card version so the private-profile warning card and reset action render correctly.
 
@@ -32,6 +32,8 @@ The companion profile card starts in a neutral checking state. While the extensi
 
 - Green: private profile saved; automatic scene and arc tracking is ready.
 - Amber: disabled, missing permission, processing, migration required, or using the last valid state after an error.
+
+The optional floating continuity widget reuses the Continuity drawer's clock icon and appears only in chats with a detected Date Simulator profile. A steady green icon means continuity is current, a gentle teal pulse means the scene and arc are updating, a brief brighter-green pulse confirms a committed revision, and amber with a small `!` means the engine needs attention. Click the widget to open the Continuity drawer. It is draggable, snaps to a screen edge, respects reduced-motion preferences, and can be disabled with **Show floating continuity status** in the drawer. The widget is a frontend-only view of existing status; it does not alter messages, prompts, variables, or checkpoints.
 
 The manual profile action is only a fallback when the extension is absent or automatic profile persistence cannot be confirmed because of configuration, permissions, or an unsaved error. It remains hidden after a valid automatic save even if tracking is disabled or a later tracker update is degraded. With a functioning engine, no per-case click is required.
 
@@ -52,8 +54,8 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.0 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
-- After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Tracking being enabled does not itself grant those permissions.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.1 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
 - Version 1.0.4 places that operator user scope in `GenerationRequestDTO.userId`, matching the Lumiverse 1.1 runtime contract for direct generation.
@@ -71,6 +73,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 - Version 1.2.4 records revision number and revision time together through one extension-owned commit helper. Reloads, status requests, and no-change reconciliation leave both values untouched; the drawer labels the timestamp as **Last revised**.
 - Version 1.2.5 upgrades tracker state to schema v3 with stable observable face, eyes, skin, and body-type/proportion fields, conservatively migrates older checkpoints to unknown values, and exposes those traits in the privacy-safe Continuity snapshot.
 - Version 1.3.0 upgrades tracker state to schema v4. It treats date and time as a fictional narrative clock unaffected by real response delay, adds sourced current-scene and relationship-arc lifecycle, structures the man's visible state and spatial continuity, adds timing/source data to objectives and source data to recurring NPCs, and conservatively upgrades schema-v1 through schema-v3 checkpoints without creating scene history.
+- Version 1.3.1 adds an optional native floating status widget that reuses the Continuity tab icon, pulses gently during sustained processing, confirms committed revisions, surfaces attention states, and opens the existing drawer without changing tracker or prompt behavior.
 
 ## Development
 

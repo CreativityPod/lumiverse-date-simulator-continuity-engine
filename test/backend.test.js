@@ -85,6 +85,8 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(typeof frontendHandler, "function");
   assert.equal(backendTest.normalizeConfig({}).maxTokens, 2_000);
   assert.equal(backendTest.normalizeConfig({}).outputMode, "auto");
+  assert.equal(backendTest.normalizeConfig({}).showStatusWidget, true);
+  assert.equal(backendTest.normalizeConfig({ showStatusWidget: false }).showStatusWidget, false);
   assert.equal(backendTest.normalizeConfig({ outputMode: "anthropic" }).outputMode, "anthropic");
   assert.equal(backendTest.normalizeConfig({ outputMode: "unsupported" }).outputMode, "auto");
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 120_000 }).timeoutMs, 120_000);
@@ -173,6 +175,7 @@ test("background reconciliation saves state and the interceptor injects one bran
     chatId: "chat-1",
     config: {
       enabled: true,
+      showStatusWidget: false,
       connectionId: "",
       outputMode: "plain",
       maxTokens: 2_000,
@@ -181,6 +184,7 @@ test("background reconciliation saves state and the interceptor injects one bran
   }, "user-1");
   assert.equal(files.get("config.json").timeoutMs, 120_000);
   assert.equal(files.get("config.json").outputMode, "plain");
+  assert.equal(files.get("config.json").showStatusWidget, false);
   assert.ok(frontendMessages.some(
     (payload) => payload.type === "continuity_config_saved" && payload.config.timeoutMs === 120_000,
   ));

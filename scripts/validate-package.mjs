@@ -11,7 +11,7 @@ const check = (condition, message) => {
 check(/^\d+\.\d+\.\d+$/.test(manifest.version), "Manifest version is semver");
 check(manifest.version === packageJson.version, "Manifest and package versions match");
 check(/^[a-z0-9_]+$/.test(manifest.identifier), "Manifest identifier is valid");
-for (const permission of ["generation", "interceptor", "chat_mutation"]) {
+for (const permission of ["generation", "interceptor", "chat_mutation", "ui_panels"]) {
   check(manifest.permissions?.includes(permission), `${permission} permission is requested`);
 }
 check(manifest.entry_backend === "dist/backend.js", "Backend entry is correct");
@@ -54,6 +54,10 @@ check(frontend.includes("MutationObserver"), "Frontend self-heals delayed profil
 check(frontend.includes("data-engine-manual"), "Frontend owns the manual-fallback visibility handshake");
 check(frontend.includes("frontend detected, but the backend did not confirm"), "Frontend watchdog distinguishes backend failure");
 check(frontend.includes("dsc-fallback-control"), "Frontend retains a themed compatibility fallback");
+check(frontend.includes("createFloatWidget"), "Frontend creates the optional native floating status widget");
+check(frontend.includes("CONTINUITY_ICON_SVG"), "Frontend reuses one Continuity icon for the tab and widget");
+check(frontend.includes("Show floating continuity status"), "Frontend exposes the floating-widget preference");
+check(backend.includes("showStatusWidget"), "Backend persists the floating-widget preference");
 
 if (failures.length) {
   console.error(`Package validation failed:\n- ${failures.join("\n- ")}`);

@@ -31,6 +31,7 @@ import {
 
 const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
+  showStatusWidget: true,
   connectionId: "",
   maxTokens: DEFAULT_TRACKER_MAX_TOKENS,
   timeoutMs: DEFAULT_TRACKER_TIMEOUT_MS,
@@ -80,6 +81,7 @@ function normalizeConfig(value) {
   const source = value && typeof value === "object" ? value : {};
   return {
     enabled: source.enabled !== false,
+    showStatusWidget: source.showStatusWidget !== false,
     connectionId: typeof source.connectionId === "string" ? source.connectionId : "",
     outputMode: TRACKER_OUTPUT_MODES.includes(source.outputMode)
       ? source.outputMode
