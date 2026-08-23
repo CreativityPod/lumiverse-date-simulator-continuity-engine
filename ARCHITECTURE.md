@@ -3,7 +3,7 @@
 The extension is split into five small modules:
 
 - `schemas.js`: strict current-scene and current-arc schema, lifecycle and provenance validation, private-response validation, and conservative schema-v1/v2/v3 upgrade.
-- `state.js`: capsule parsing, branch fingerprints, checkpoint selection, prompt compaction, and canonical injection.
+- `state.js`: capsule parsing, branch fingerprints, checkpoint selection, prompt compaction, and canonical injection through a private compact prompt projection.
 - `tracker.js`: provider-aware quiet generation, prompts, JSON extraction, and validation.
 - `backend.js`: storage, queues, event reconciliation, migration, variable mirrors, readiness, and prompt interception.
 - `frontend.js`: native Continuity drawer, compatibility controls, and self-healing profile-card status integration.
@@ -33,6 +33,8 @@ Before any stable case exists, an exact `1` or `Surprise Me` setup command may r
 ## Trust boundaries
 
 The public transcript is untrusted tracker input. State fields reject HTML comments and Date Simulator XML-like envelopes. Strict key sets, length bounds, list caps, and source-message checks reduce accidental prompt/state injection. The interceptor marks injected data as private and the card separately forbids exposing it.
+
+Canonical extension storage, checkpoints, chat-variable mirrors, tracker generation, migrations, and opt-in private inspection retain the complete schema-v4 JSON object. The late interceptor derives a one-way private prompt projection from that validated object: it preserves every established scene, arc, relationship, private-response, NPC, and objective value while omitting provenance identifiers, empty collections, and known unknown/default values. The projection defines omitted fields as unknown or empty and is never parsed back into canonical state.
 
 The tracker has no chat-mutation capability itself. Only the backend commits validated state, and it verifies the branch immediately before doing so.
 

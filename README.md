@@ -1,6 +1,6 @@
 # Date Simulator Continuity Engine
 
-An optional Lumiverse extension for Date Simulator v1.4 and v1.5. It runs a small background LLM update after immersive turns, stores branch-safe scene, relationship, and private-response checkpoints, and privately injects the latest state before the next roleplay generation.
+An optional Lumiverse extension for Date Simulator v1.4 and v1.5. It runs a small background LLM update after immersive turns, stores branch-safe scene, relationship, and private-response checkpoints, and privately injects a compact projection of the latest state before the next roleplay generation.
 
 For v1.5 Surprise Me setup, it also injects one deterministic branch-stable casting draw across independent situation and engagement axes. The draw is prompt-only, idempotent, never becomes story state, and never selects an outcome.
 
@@ -41,6 +41,8 @@ The manual profile action is only a fallback when the extension is absent or aut
 
 The tracker starts after every eligible assistant response. Before the next roleplay generation, the prompt interceptor queues a verification pass and waits for reconciliation of the latest completed assistant turn to finish. Each provider request is bounded by the configured tracker timeout; a failed request retains the last valid state and marks the engine degraded.
 
+Canonical storage, tracker output, chat-variable mirrors, migration, and opt-in private inspection remain complete schema-v4 JSON. Prompt injection uses a private one-way compact projection that omits source-message identifiers, empty collections, and known unknown/default values while retaining established private-response, relationship, objective, NPC, and scene facts. Omitted prompt fields are explicitly defined as unknown or empty; stored state is not pruned or rewritten. The injected block remains visible through Lumiverse Prompt Breakdown and Dry Run.
+
 Tracker output is normalized conservatively and then passed through the strict validator before commit. Invalid leaf fields preserve their previous values, oversized safe text is truncated, malformed NPC or objective collections preserve the previous collection, and unsupported relationship source linkage preserves the previous relationship. A repair call is reserved for structurally unusable output.
 
 Structured-output modes are **Auto**, **OpenAI-compatible JSON Schema**, **Anthropic Tool**, and **Plain JSON**. Auto uses Lumiverse connection metadata; it does not probe the provider with an extra generation.
@@ -54,7 +56,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.3 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.4 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -76,6 +78,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 - Version 1.3.1 adds an optional native floating status widget that reuses the Continuity tab icon, pulses gently during sustained processing, confirms committed revisions, surfaces attention states, and opens the existing drawer without changing tracker or prompt behavior.
 - Version 1.3.2 removes the floating widget's container chrome, places a plain attention mark at the icon's upper-right, and prevents drag-release clicks from opening the Continuity drawer.
 - Version 1.3.3 renames the display switch to **Show Widget** and makes it hide/show and persist immediately without requiring **Save Settings**.
+- Version 1.3.4 keeps full schema-v4 JSON for canonical state and private inspection while injecting a compact private prompt projection that removes provenance, empty collections, and known unknown/default values without dropping established continuity.
 
 ## Development
 

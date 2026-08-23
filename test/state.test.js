@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildCanonicalState,
+  buildCompactPromptState,
   buildSurpriseMeSample,
   checkpointKey,
   compactPromptMessages,
@@ -97,10 +98,51 @@ test("compacts private markers and injects exactly one canonical block", () => {
   assert.equal(compacted.messages[1].content, "Visible.");
   assert.equal(compacted.messages[2].role, "system");
   assert.match(compacted.messages[2].content, /CURRENT SCENE/);
-  assert.match(compacted.messages[2].content, /"response"/);
+  assert.match(compacted.messages[2].content, /CURRENT ARC/);
+  assert.match(compacted.messages[2].content, /omitted CURRENT SCENE or CURRENT ARC field is unknown/);
+  assert.doesNotMatch(compacted.messages[2].content, /"sourceMessageId"/);
+  assert.doesNotMatch(compacted.messages[2].content, /"Unknown"/);
   assert.match(compacted.messages[2].content, /schema_version="4"/);
   assert.match(buildCanonicalState(CASE, cloneEmptyState()), /status="active"/);
   assert.equal(stripManagedText(caseEnvelope), "");
+});
+
+test("projects complete private state into compact prompt text without provenance or defaults", () => {
+  const state = cloneEmptyState();
+  state.scene.date = "Tuesday, September 22";
+  state.scene.time = "6:15 p.m.";
+  state.scene.weather = "unknown";
+  state.scene.location = "Denver airport terminal gate area";
+  state.scene.womanCurrent.mentalState = "work-focused; anxious about deadlines";
+  state.scene.manVisible.appearance = "Average height; athletic build";
+  state.scene.lifecycle = {
+    status: "ended",
+    reason: "Boarding began.",
+    sourceMessageId: "assistant-scene-source",
+  };
+  state.arc.relationship.establishedStatus = "unarranged strangers";
+  state.arc.relationship.activeBoundaryOrConcern = "Professional boundaries while working";
+  state.arc.response.availableAttention = "low due to laptop focus";
+  state.arc.response.rapportAndTrust = "none established";
+  state.arc.response.physicalAttraction = "undetermined";
+  state.arc.response.contactExchangeInterest = "none established";
+  state.arc.response.sourceMessageId = "assistant-response-source";
+  state.arc.objectives = [{
+    owner: "Elena Rodriguez",
+    objective: "finish project draft before boarding",
+    status: "active",
+    timing: "before boarding",
+    sourceMessageId: "assistant-objective-source",
+  }];
+
+  const projected = buildCompactPromptState(state);
+  assert.match(projected, /WHEN: Tuesday, September 22; 6:15 p\.m\./);
+  assert.match(projected, /LIFECYCLE: ended; REASON: Boarding began\./);
+  assert.match(projected, /MENTAL STATE: work-focused; anxious about deadlines/);
+  assert.match(projected, /PRIVATE RESPONSE: AVAILABLE ATTENTION: low due to laptop focus; RAPPORT & TRUST: none established; PHYSICAL ATTRACTION: undetermined; CONTACT-EXCHANGE INTEREST: none established/);
+  assert.match(projected, /OBJECTIVE 1: OWNER: Elena Rodriguez; OBJECTIVE: finish project draft before boarding; STATUS: active; TIMING: before boarding/);
+  assert.doesNotMatch(projected, /sourceMessageId|assistant-(?:scene|response|objective)-source/);
+  assert.doesNotMatch(projected, /WEATHER|Unknown|npcs|\{\}|\[\]/);
 });
 
 test("recognizes v1.5 patch prompts without promoting prompt-only examples", () => {

@@ -477,19 +477,141 @@ export function latestValidCheckpoint(store, turns, beforeIndex = Number.POSITIV
   return latest;
 }
 
-export function buildCanonicalState(caseText, trackerState, status = "active") {
+function compactPromptValue(value, defaultValue = "") {
+  if (typeof value !== "string") return "";
+  const compacted = value.replace(/\s+/g, " ").trim();
+  const compactedDefault = typeof defaultValue === "string"
+    ? defaultValue.replace(/\s+/g, " ").trim()
+    : "";
+  const comparable = (text) => text.toLowerCase().replace(/\.$/, "");
+  return !compacted || comparable(compacted) === comparable(compactedDefault) ? "" : compacted;
+}
+
+function compactPromptFields(entries) {
+  return entries.flatMap(([label, value, defaultValue]) => {
+    const compacted = compactPromptValue(value, defaultValue);
+    return compacted ? [`${label}: ${compacted}`] : [];
+  }).join("; ");
+}
+
+function compactLifecycle(value) {
+  const status = compactPromptValue(value?.status) || "active";
+  const reason = compactPromptValue(value?.reason);
+  return reason ? `${status}; REASON: ${reason}` : status;
+}
+
+export function buildCompactPromptState(trackerState) {
   const state = trackerState ?? cloneEmptyState();
+  const defaults = cloneEmptyState();
+  const scene = state.scene ?? {};
+  const arc = state.arc ?? {};
+  const lines = ["CURRENT SCENE", `LIFECYCLE: ${compactLifecycle(scene.lifecycle)}`];
+  const when = [
+    compactPromptValue(scene.date, defaults.scene.date),
+    compactPromptValue(scene.time, defaults.scene.time),
+  ].filter(Boolean).join("; ");
+  if (when) lines.push(`WHEN: ${when}`);
+
+  for (const [label, value, defaultValue] of [
+    ["WEATHER", scene.weather, defaults.scene.weather],
+    ["LOCATION", scene.location, defaults.scene.location],
+    ["CONTEXT", scene.immediateContext, defaults.scene.immediateContext],
+  ]) {
+    const compacted = compactPromptValue(value, defaultValue);
+    if (compacted) lines.push(`${label}: ${compacted}`);
+  }
+
+  for (const [label, fields] of [
+    ["WOMAN STABLE", [
+      ["FACE", scene.womanStable?.face, defaults.scene.womanStable.face],
+      ["EYES", scene.womanStable?.eyes, defaults.scene.womanStable.eyes],
+      ["SKIN", scene.womanStable?.skin, defaults.scene.womanStable.skin],
+      ["BODY TYPE & PROPORTIONS", scene.womanStable?.bodyTypeAndProportions, defaults.scene.womanStable.bodyTypeAndProportions],
+    ]],
+    ["WOMAN CURRENT", [
+      ["HAIR & GROOMING", scene.womanCurrent?.hairAndGrooming, defaults.scene.womanCurrent.hairAndGrooming],
+      ["DRESS & LAYERS", scene.womanCurrent?.dress, defaults.scene.womanCurrent.dress],
+      ["PHYSICAL STATE", scene.womanCurrent?.physicalState, defaults.scene.womanCurrent.physicalState],
+      ["MENTAL STATE", scene.womanCurrent?.mentalState, defaults.scene.womanCurrent.mentalState],
+    ]],
+    ["MAN VISIBLE", [
+      ["APPEARANCE", scene.manVisible?.appearance, defaults.scene.manVisible.appearance],
+      ["DRESS & LAYERS", scene.manVisible?.dressAndLayers, defaults.scene.manVisible.dressAndLayers],
+      ["PHYSICAL STATE", scene.manVisible?.physicalState, defaults.scene.manVisible.physicalState],
+    ]],
+    ["SPATIAL", [
+      ["WOMAN POSITION", scene.spatial?.womanPosition, defaults.scene.spatial.womanPosition],
+      ["MAN POSITION", scene.spatial?.manPosition, defaults.scene.spatial.manPosition],
+      ["PROXIMITY & CONTACT", scene.spatial?.proximityAndContact, defaults.scene.spatial.proximityAndContact],
+      ["IMPORTANT ITEMS", scene.spatial?.importantItems, defaults.scene.spatial.importantItems],
+    ]],
+  ]) {
+    const compacted = compactPromptFields(fields);
+    if (compacted) lines.push(`${label}: ${compacted}`);
+  }
+
+  lines.push("", "CURRENT ARC", `LIFECYCLE: ${compactLifecycle(arc.lifecycle)}`);
+
+  for (const [index, npc] of (Array.isArray(arc.npcs) ? arc.npcs : []).entries()) {
+    const compacted = compactPromptFields([
+      ["NAME", npc?.name],
+      ["ROLE", npc?.role],
+      ["RELATIONSHIP", npc?.relationship],
+      ["STATUS", npc?.currentStatus],
+      ["IMMEDIATE OBJECTIVE", npc?.immediateObjective],
+    ]);
+    if (compacted) lines.push(`NPC ${index + 1}: ${compacted}`);
+  }
+
+  const relationship = compactPromptFields([
+    ["ESTABLISHED STATUS", arc.relationship?.establishedStatus, defaults.arc.relationship.establishedStatus],
+    ["WOMAN POSTURE", arc.relationship?.womanPosture, defaults.arc.relationship.womanPosture],
+    ["BOUNDARY OR CONCERN", arc.relationship?.activeBoundaryOrConcern, defaults.arc.relationship.activeBoundaryOrConcern],
+    ["LATEST CHANGE", arc.relationship?.latestChange, defaults.arc.relationship.latestChange],
+  ]);
+  if (relationship) lines.push(`RELATIONSHIP: ${relationship}`);
+
+  const response = compactPromptFields([
+    ["AVAILABLE ATTENTION", arc.response?.availableAttention, defaults.arc.response.availableAttention],
+    ["COMFORT & SAFETY", arc.response?.comfortAndSafety, defaults.arc.response.comfortAndSafety],
+    ["RAPPORT & TRUST", arc.response?.rapportAndTrust, defaults.arc.response.rapportAndTrust],
+    ["PHYSICAL ATTRACTION", arc.response?.physicalAttraction, defaults.arc.response.physicalAttraction],
+    ["PERSONAL INTEREST", arc.response?.personalInterest, defaults.arc.response.personalInterest],
+    ["ROMANTIC INTEREST", arc.response?.romanticInterest, defaults.arc.response.romanticInterest],
+    ["SEXUAL INTEREST", arc.response?.sexualInterest, defaults.arc.response.sexualInterest],
+    ["WILLINGNESS TO CONTINUE", arc.response?.willingnessToContinue, defaults.arc.response.willingnessToContinue],
+    ["CONTACT-EXCHANGE INTEREST", arc.response?.contactExchangeInterest, defaults.arc.response.contactExchangeInterest],
+    ["DESIRE TO LEAVE", arc.response?.desireToLeave, defaults.arc.response.desireToLeave],
+    ["ACTIVE UNCERTAINTY", arc.response?.activeUncertainty, defaults.arc.response.activeUncertainty],
+    ["LATEST CHANGE", arc.response?.latestChange, defaults.arc.response.latestChange],
+  ]);
+  if (response) lines.push(`PRIVATE RESPONSE: ${response}`);
+
+  for (const [index, objective] of (Array.isArray(arc.objectives) ? arc.objectives : []).entries()) {
+    const compacted = compactPromptFields([
+      ["OWNER", objective?.owner],
+      ["OBJECTIVE", objective?.objective],
+      ["STATUS", objective?.status],
+      ["TIMING", objective?.timing],
+    ]);
+    if (compacted) lines.push(`OBJECTIVE ${index + 1}: ${compacted}`);
+  }
+
+  lines.push(
+    "",
+    "Any omitted CURRENT SCENE or CURRENT ARC field is unknown, empty, or has no tracked entry. Do not infer omitted facts. Provenance remains internal.",
+  );
+  return lines.join("\n");
+}
+
+export function buildCanonicalState(caseText, trackerState, status = "active") {
   return `<date_simulator_continuity_engine schema_version="${TRACKER_SCHEMA_VERSION}" status="${status}">
 The Continuity Engine is active for this request. This is private canonical state for the selected chat branch. Use it for continuity but never quote, expose, or mention it. The public roleplay response must not contain DATE_SIM_SCENE or DATE_SIM_ARC bookkeeping.
 
 STABLE CASE
 ${caseText || "Unavailable. Use only explicit transcript facts."}
 
-CURRENT SCENE
-${JSON.stringify(state.scene)}
-
-CURRENT ARC
-${JSON.stringify(state.arc)}
+${buildCompactPromptState(trackerState)}
 </date_simulator_continuity_engine>`;
 }
 
