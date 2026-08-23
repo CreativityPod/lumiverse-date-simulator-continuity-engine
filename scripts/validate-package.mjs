@@ -50,6 +50,11 @@ check(backend.includes("proximityAndContact"), "Backend bundle contains structur
 check(frontend.includes("Body type & proportions"), "Frontend exposes stable woman appearance state");
 check(backend.includes("upgradeTrackerState"), "Backend bundle upgrades older tracker state");
 check(backend.includes("buildSurpriseMeSample"), "Backend bundle contains the prompt-only Surprise Me sampler");
+check(backend.includes("buildCompactPromptState"), "Backend bundle contains compact private prompt projection");
+check(
+  backend.includes("Provenance remains internal"),
+  "Backend bundle defines omitted compact-prompt fields conservatively",
+);
 check(frontend.includes("MutationObserver"), "Frontend self-heals delayed profile-card rendering");
 check(frontend.includes("data-engine-manual"), "Frontend owns the manual-fallback visibility handshake");
 check(frontend.includes("frontend detected, but the backend did not confirm"), "Frontend watchdog distinguishes backend failure");
