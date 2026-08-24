@@ -21,8 +21,10 @@ export const V15_VERSION_PATTERN = /<date_simulator_version>\s*1\.5(?:\.\d+)?\s*
 export const CASE_PATTERN = /<!--DATE_SIM_CASE\s*([\s\S]*?)\s*END_DATE_SIM_CASE-->/gi;
 export const LEGACY_SCENE_PATTERN = /<!--DATE_SIM_SCENE\s*([\s\S]*?)\s*END_DATE_SIM_SCENE-->/gi;
 export const RESET_PATTERN = /<!--DATE_SIM_RESET\s*-->/gi;
+export const STARTUP_MENU_PATTERN = /<!--DATE_SIM_STARTUP_MENU_V1\s*-->/gi;
 export const CANONICAL_PATTERN = /\n?<date_simulator_continuity_engine\b[\s\S]*?<\/date_simulator_continuity_engine>\n?/gi;
 export const CASE_SAMPLER_PATTERN = /\n?<date_simulator_case_sampler\b[\s\S]*?<\/date_simulator_case_sampler>\n?/gi;
+export const SAVED_CASE_FALLBACK_PATTERN = /<date_simulator_saved_case_fallback\b[^>]*>[\s\S]*?<\/date_simulator_saved_case_fallback>/gi;
 
 const CASE_FIELDS = [
   "CASE",
@@ -108,6 +110,7 @@ export function stripManagedText(text) {
     .replace(new RegExp(CASE_PATTERN.source, CASE_PATTERN.flags), "")
     .replace(new RegExp(LEGACY_SCENE_PATTERN.source, LEGACY_SCENE_PATTERN.flags), "")
     .replace(new RegExp(RESET_PATTERN.source, RESET_PATTERN.flags), "")
+    .replace(new RegExp(STARTUP_MENU_PATTERN.source, STARTUP_MENU_PATTERN.flags), "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -123,7 +126,8 @@ function hashToken(value) {
   return hash >>> 0;
 }
 
-const SURPRISE_COMMAND = /^\s*(?:1|surprise\s+me)[.!]?\s*$/i;
+const EXPLICIT_SURPRISE_COMMAND = /^\s*(?:surprise\s+me|1\s*[.)-]?\s+surprise\s+me)[.!]?\s*$/i;
+const NUMERIC_ONE_COMMAND = /^\s*1[.!]?\s*$/;
 const SAMPLE_AXES = Object.freeze({
   relationshipSituation: [
     "single and not currently dating",
@@ -206,8 +210,51 @@ const SAMPLE_AXES = Object.freeze({
   ],
 });
 
+function precedingAssistantMessage(messages, userIndex) {
+  for (let index = userIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "assistant") return messages[index];
+  }
+  return null;
+}
+
+export function stripStartupMenuMarkers(messages) {
+  return (messages ?? []).map((message) => {
+    if (!message || typeof message !== "object" || message.role !== "assistant") return message;
+    return {
+      ...message,
+      content: mapTextContent(message.content, (text) => {
+        const pattern = new RegExp(STARTUP_MENU_PATTERN.source, STARTUP_MENU_PATTERN.flags);
+        if (!pattern.test(text)) return text;
+        return normalizeNewlines(text)
+          .replace(new RegExp(STARTUP_MENU_PATTERN.source, STARTUP_MENU_PATTERN.flags), "")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+      }),
+    };
+  });
+}
+
 export function buildSurpriseMeSample(messages, chatId = "") {
-  const cleanMessages = (messages ?? []).flatMap((message) => {
+  const sourceMessages = messages ?? [];
+  const sourceFinalUserIndex = sourceMessages.reduce(
+    (latest, message, index) => (message?.role === "user" ? index : latest),
+    -1,
+  );
+  if (sourceFinalUserIndex < 0) return null;
+  if (!sourceMessages.some((message) => V15_VERSION_PATTERN.test(contentToText(message?.content)))) {
+    return null;
+  }
+  const command = contentToText(sourceMessages[sourceFinalUserIndex]?.content);
+  const explicitSurprise = EXPLICIT_SURPRISE_COMMAND.test(command);
+  const numericOne = NUMERIC_ONE_COMMAND.test(command);
+  const precedingAssistant = precedingAssistantMessage(sourceMessages, sourceFinalUserIndex);
+  const markedStartupMenu = new RegExp(
+    STARTUP_MENU_PATTERN.source,
+    STARTUP_MENU_PATTERN.flags,
+  ).test(contentToText(precedingAssistant?.content));
+  if (!explicitSurprise && !(numericOne && markedStartupMenu)) return null;
+
+  const cleanMessages = stripStartupMenuMarkers(sourceMessages).flatMap((message) => {
     if (!message || typeof message !== "object") return [message];
     const rawText = contentToText(message.content);
     const cleaned = {
@@ -229,12 +276,6 @@ export function buildSurpriseMeSample(messages, chatId = "") {
     (latest, message, index) => (message?.role === "user" ? index : latest),
     -1,
   );
-  if (finalUserIndex < 0) return null;
-  if (!cleanMessages.some((message) => V15_VERSION_PATTERN.test(contentToText(message?.content)))) {
-    return null;
-  }
-  const command = contentToText(cleanMessages[finalUserIndex]?.content);
-  if (!SURPRISE_COMMAND.test(command)) return null;
 
   let state = hashToken(`${chatId}|${prefixFingerprint(cleanMessages, finalUserIndex)}|v1.5`);
   const draw = (values) => {
@@ -626,8 +667,11 @@ export function compactPromptMessages(messages, caseText, trackerState, status =
         ...message,
         content: mapTextContent(message.content, (text) =>
           normalizeNewlines(text).replace(
-            /(^|\n)([ \t]*[•*-][ \t]+SAVED CASE:)[\s\S]*?(?=\n[ \t]*[•*-][ \t]+Treat a nonempty saved capsule)/gim,
-            "$1$2 [managed by Date Simulator Continuity Engine]",
+            new RegExp(
+              SAVED_CASE_FALLBACK_PATTERN.source,
+              SAVED_CASE_FALLBACK_PATTERN.flags,
+            ),
+            "[managed by Date Simulator Continuity Engine]",
           ),
         ),
       };

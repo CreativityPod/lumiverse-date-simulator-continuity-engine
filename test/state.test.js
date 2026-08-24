@@ -13,6 +13,7 @@ import {
   normalizeStore,
   prefixFingerprint,
   stripManagedText,
+  stripStartupMenuMarkers,
   validateCaseCapsuleDetailed,
 } from "../src/state.js";
 import { cloneEmptyState } from "../src/schemas.js";
@@ -90,11 +91,24 @@ test("fingerprints change after content edits and include swipe selection", () =
 
 test("compacts private markers and injects exactly one canonical block", () => {
   const messages = [
-    { role: "system", content: "<date_simulator_version>1.4</date_simulator_version>" },
+    {
+      role: "system",
+      content: `<date_simulator_version>1.5.5</date_simulator_version>
+• SAVED CASE:
+<date_simulator_saved_case_fallback>
+${CASE}
+</date_simulator_saved_case_fallback>
+• This neighboring instruction may be freely rewritten.`,
+    },
     { id: "a0", role: "assistant", content: `Visible.\n${caseEnvelope}` },
     { id: "u1", role: "user", content: "Continue." },
   ];
   const compacted = compactPromptMessages(messages, CASE, cloneEmptyState());
+  const providerText = compacted.messages.map((message) => String(message.content)).join("\n");
+  assert.match(compacted.messages[0].content, /SAVED CASE:\s*\n\[managed by Date Simulator Continuity Engine\]/);
+  assert.match(compacted.messages[0].content, /neighboring instruction may be freely rewritten/);
+  assert.doesNotMatch(compacted.messages[0].content, /date_simulator_saved_case_fallback/);
+  assert.equal((providerText.match(/CASE: DS-V14-01/g) ?? []).length, 1);
   assert.equal(compacted.messages[1].content, "Visible.");
   assert.equal(compacted.messages[2].role, "system");
   assert.match(compacted.messages[2].content, /CURRENT SCENE/);
@@ -105,6 +119,17 @@ test("compacts private markers and injects exactly one canonical block", () => {
   assert.match(compacted.messages[2].content, /schema_version="4"/);
   assert.match(buildCanonicalState(CASE, cloneEmptyState()), /status="active"/);
   assert.equal(stripManagedText(caseEnvelope), "");
+});
+
+test("does not guess at unmarked saved-case prose", () => {
+  const legacySystem = `<date_simulator_version>1.5</date_simulator_version>
+• SAVED CASE: ${CASE}
+• Treat a nonempty saved capsule as canonical.`;
+  const compacted = compactPromptMessages([
+    { role: "system", content: legacySystem },
+    { role: "user", content: "Continue." },
+  ], CASE, cloneEmptyState());
+  assert.equal(compacted.messages[0].content, legacySystem);
 });
 
 test("projects complete private state into compact prompt text without provenance or defaults", () => {
@@ -199,6 +224,30 @@ test("builds one deterministic prompt-only Surprise Me casting draw", () => {
     { role: "system", content: "<date_simulator_version>1.5</date_simulator_version>" },
     { role: "user", content: "Quick Setup" },
   ], "chat-sample"), null);
+  assert.equal(buildSurpriseMeSample([
+    { role: "system", content: "<date_simulator_version>1.5.5</date_simulator_version>" },
+    { role: "assistant", content: "1. Upload an image\n2. Enter her age\n3. Generate automatically" },
+    { role: "user", content: "1" },
+  ], "chat-sample"), null);
+  assert.equal(buildSurpriseMeSample([
+    { role: "system", content: "<date_simulator_version>1.5.5</date_simulator_version>" },
+    { role: "user", content: "1" },
+  ], "chat-sample"), null);
+  const markedNumeric = buildSurpriseMeSample([
+    { role: "system", content: "<date_simulator_version>1.5.5</date_simulator_version>" },
+    { role: "assistant", content: "1. Surprise Me\n2. Quick Setup\n<!--DATE_SIM_STARTUP_MENU_V1-->" },
+    { role: "user", content: "1" },
+  ], "chat-sample-numeric");
+  assert.ok(markedNumeric);
+  assert.doesNotMatch(
+    markedNumeric.messages.map((message) => String(message.content)).join("\n"),
+    /DATE_SIM_STARTUP_MENU_V1/,
+  );
+  const strippedNonSample = stripStartupMenuMarkers([
+    { role: "assistant", content: "Startup.\n<!--DATE_SIM_STARTUP_MENU_V1-->" },
+    { role: "user", content: "2" },
+  ]);
+  assert.equal(strippedNonSample[0].content, "Startup.");
   assert.equal(buildSurpriseMeSample([
     { role: "system", content: "<date_simulator_version>1.4.1</date_simulator_version>" },
     { role: "user", content: "Surprise Me" },

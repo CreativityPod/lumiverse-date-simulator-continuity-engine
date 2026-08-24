@@ -50,6 +50,9 @@ check(backend.includes("proximityAndContact"), "Backend bundle contains structur
 check(frontend.includes("Body type & proportions"), "Frontend exposes stable woman appearance state");
 check(backend.includes("upgradeTrackerState"), "Backend bundle upgrades older tracker state");
 check(backend.includes("buildSurpriseMeSample"), "Backend bundle contains the prompt-only Surprise Me sampler");
+check(backend.includes("DATE_SIM_STARTUP_MENU_V1"), "Backend bundle contains contextual startup-menu routing");
+check(backend.includes("date_simulator_saved_case_fallback"), "Backend bundle contains structural saved-case suppression");
+check(!backend.includes("Treat a nonempty saved capsule"), "Backend bundle contains no legacy prose-based saved-case matcher");
 check(backend.includes("buildCompactPromptState"), "Backend bundle contains compact private prompt projection");
 check(
   backend.includes("Provenance remains internal"),

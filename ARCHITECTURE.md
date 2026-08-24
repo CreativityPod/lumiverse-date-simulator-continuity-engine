@@ -28,7 +28,11 @@ Queues serialize updates per chat while allowing different chats to proceed inde
 
 ## Surprise Me sampler
 
-Before any stable case exists, an exact `1` or `Surprise Me` setup command may receive one deterministic private sampler block. Pure state logic removes any prior sampler block, fingerprints the selected assembled prefix plus chat ID, draws each axis through a seeded generator, and returns one prompt-only system message immediately before the final user command. The sampler does not read prompt examples as live state, does not mutate the transcript or chat variables, does not select cultural identity or outcome, and is inactive for every other setup path and active case.
+Before any stable case exists, an explicit `Surprise Me` setup command may receive one deterministic private sampler block. A bare `1` receives that block only when the immediately preceding assistant message contains the branch-local `DATE_SIM_STARTUP_MENU_V1` marker. Pure state logic removes prior sampler and startup-menu markers from the provider-bound copy, fingerprints the selected assembled prefix plus chat ID, draws each axis through a seeded generator, and returns one prompt-only system message immediately before the final user command. The sampler does not read prompt examples as live state, does not mutate the transcript or chat variables, does not select cultural identity or outcome, and is inactive for every other setup path and active case.
+
+## Stable-case prompt authority
+
+The card wraps its chat-variable fallback in `date_simulator_saved_case_fallback`. When a validated extension case is active, prompt compaction replaces that structurally bounded fallback with a short managed placeholder and injects exactly one self-contained canonical block containing STABLE CASE, CURRENT SCENE, and CURRENT ARC. The extension does not match neighboring instructional prose. Unmarked legacy fallback text is left untouched rather than guessed at.
 
 ## Trust boundaries
 

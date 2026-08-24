@@ -2,14 +2,15 @@
 
 An optional Lumiverse extension for Date Simulator v1.4 and v1.5. It runs a small background LLM update after immersive turns, stores branch-safe scene, relationship, and private-response checkpoints, and privately injects a compact projection of the latest state before the next roleplay generation.
 
-For v1.5 Surprise Me setup, it also injects one deterministic branch-stable casting draw across independent situation and engagement axes. The draw is prompt-only, idempotent, never becomes story state, and never selects an outcome.
+For v1.5.5 Surprise Me setup, it also injects one deterministic branch-stable casting draw across independent situation and engagement axes. An explicit `Surprise Me` always qualifies before a case is saved; a bare `1` qualifies only after the marked top-level startup menu. The draw is prompt-only, idempotent, never becomes story state, and never selects an outcome.
 
 ## Compatibility
 
-- Intended cards: `Date_Simulator_CCv3_v1.5.json` and the v1.4 family.
-- Matching companion regex package: `Date_Simulator_Persistent_State_v1.5.json` or the card's v1.4 companion.
+- Intended card: `Date_Simulator_CCv3_v1.5.5.json`.
+- Matching companion regex package: `Date_Simulator_Persistent_State_v1.5.5.json`.
 - Do not enable the legacy v1.3.1 State Bridge on the same chat.
-- v1.4 and v1.5 remain usable without this extension, but they deliberately have no inline structured scene fallback.
+- Earlier v1.4/v1.5 prompts remain recognizable for continuity tracking, but contextual numeric startup routing and structural saved-case suppression require the coordinated v1.5.5 markers.
+- v1.5.5 remains usable without this extension, but it deliberately has no inline structured scene fallback.
 
 ## Install
 
@@ -56,7 +57,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.4 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.5 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -79,6 +80,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 - Version 1.3.2 removes the floating widget's container chrome, places a plain attention mark at the icon's upper-right, and prevents drag-release clicks from opening the Continuity drawer.
 - Version 1.3.3 renames the display switch to **Show Widget** and makes it hide/show and persist immediately without requiring **Save Settings**.
 - Version 1.3.4 keeps full schema-v4 JSON for canonical state and private inspection while injecting a compact private prompt projection that removes provenance, empty collections, and known unknown/default values without dropping established continuity.
+- Version 1.3.5 recognizes bare `1` as Surprise Me only after a branch-local marked startup menu, strips that routing marker from provider-bound assistant history, and structurally suppresses the card's marked saved-case fallback so the authoritative engine block contains the only stable-case copy.
 
 ## Development
 
