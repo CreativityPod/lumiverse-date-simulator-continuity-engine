@@ -14,6 +14,7 @@ import {
   normalizeStore,
   prefixFingerprint,
   selectCheckpoint,
+  stripStartupMenuMarkers,
   transcriptForMigration,
 } from "./state.js";
 import {
@@ -641,7 +642,7 @@ async function interceptPrompt(messages, context) {
   // profile is saved.
   if (!caseText) {
     const sample = buildSurpriseMeSample(messages, chatId);
-    if (!sample) return messages;
+    if (!sample) return stripStartupMenuMarkers(messages);
     const sampledMessages = [...sample.messages];
     sampledMessages.splice(sample.insertionIndex, 0, sample.message);
     return {

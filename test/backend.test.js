@@ -160,6 +160,28 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(sampledSetup.breakdown[0].name, "Date Simulator Case Sampler");
   assert.match(sampledSetup.messages[1].content, /date_simulator_case_sampler/);
   assert.equal(sampledSetup.messages[2].content, "Surprise me");
+
+  const numericSetup = await interceptor([
+    { role: "system", content: "<date_simulator_version>1.5.5</date_simulator_version>" },
+    { role: "assistant", content: "1. Surprise Me\n2. Quick Setup\n<!--DATE_SIM_STARTUP_MENU_V1-->" },
+    { role: "user", content: "1" },
+  ], { chatId: "chat-1" });
+  assert.equal(numericSetup.breakdown[0].name, "Date Simulator Case Sampler");
+  assert.doesNotMatch(
+    numericSetup.messages.map((message) => String(message.content)).join("\n"),
+    /DATE_SIM_STARTUP_MENU_V1/,
+  );
+
+  const guidedNumeric = await interceptor([
+    { role: "system", content: "<date_simulator_version>1.5.5</date_simulator_version>" },
+    { role: "assistant", content: "1. Upload an image\n2. Enter her age\n3. Generate automatically" },
+    { role: "user", content: "1" },
+  ], { chatId: "chat-1" });
+  assert.ok(Array.isArray(guidedNumeric));
+  assert.doesNotMatch(
+    guidedNumeric.map((message) => String(message.content)).join("\n"),
+    /date_simulator_case_sampler/,
+  );
   messages.push(opening);
 
   await frontendHandler({ type: "continuity_get_status", chatId: "chat-1" }, "user-1");
