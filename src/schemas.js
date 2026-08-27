@@ -110,6 +110,32 @@ const RESPONSE_KEYS = [
   "sourceMessageId",
 ];
 const OBJECTIVE_KEYS = ["owner", "objective", "status", "timing", "sourceMessageId"];
+const TRACKER_ACTIONS = Object.freeze(["preserve", "update"]);
+const LLM_LIFECYCLE_KEYS = ["status", "reason", "action"];
+const LLM_NPC_KEYS = ["name", "role", "relationship", "currentStatus", "immediateObjective", "action"];
+const LLM_RELATIONSHIP_KEYS = [
+  "establishedStatus",
+  "womanPosture",
+  "activeBoundaryOrConcern",
+  "latestChange",
+  "action",
+];
+const LLM_RESPONSE_KEYS = [
+  "availableAttention",
+  "comfortAndSafety",
+  "rapportAndTrust",
+  "physicalAttraction",
+  "personalInterest",
+  "romanticInterest",
+  "sexualInterest",
+  "willingnessToContinue",
+  "contactExchangeInterest",
+  "desireToLeave",
+  "activeUncertainty",
+  "latestChange",
+  "action",
+];
+const LLM_OBJECTIVE_KEYS = ["owner", "objective", "status", "timing", "action"];
 
 function providerStringSchema() {
   // Keep the provider grammar deliberately structural. llama.cpp's
@@ -117,6 +143,10 @@ function providerStringSchema() {
   // bounded repetitions can also exceed its grammar limits. Exact lengths,
   // emptiness, and managed-markup rules are enforced locally before commit.
   return { type: "string" };
+}
+
+function providerActionSchema() {
+  return { type: "string", enum: TRACKER_ACTIONS };
 }
 
 function isPlainObject(value) {
@@ -507,6 +537,225 @@ function previousOrEmpty(previousState) {
     sourceMessageId: previousState.arc?.relationship?.sourceMessageId || undefined,
     allowedSourceMessageIds: trackerSourceMessageIds(previousState),
   }) ?? cloneEmptyState();
+}
+
+function withoutSourceWithAction(value) {
+  const { sourceMessageId: _sourceMessageId, ...rest } = value ?? {};
+  return { ...rest, action: "preserve" };
+}
+
+/**
+ * Provider-facing previous state. Provenance is deliberately removed so the
+ * model never needs to read, copy, or invent opaque message identifiers.
+ */
+export function trackerStateForLlm(previousState) {
+  const canonical = previousOrEmpty(previousState);
+  return {
+    schemaVersion: TRACKER_SCHEMA_VERSION,
+    scene: {
+      ...structuredClone(canonical.scene),
+      lifecycle: withoutSourceWithAction(canonical.scene.lifecycle),
+    },
+    arc: {
+      ...structuredClone(canonical.arc),
+      lifecycle: withoutSourceWithAction(canonical.arc.lifecycle),
+      npcs: canonical.arc.npcs.map(withoutSourceWithAction),
+      relationship: withoutSourceWithAction(canonical.arc.relationship),
+      response: withoutSourceWithAction(canonical.arc.response),
+      objectives: canonical.arc.objectives.map(withoutSourceWithAction),
+    },
+  };
+}
+
+function normalizedComparableText(value) {
+  if (typeof value !== "string") return null;
+  return value.replace(/\r\n?/g, "\n").replace(/[\t ]+/g, " ").trim();
+}
+
+function matchesPreviousItem(candidate, previous, keys) {
+  return keys.every(
+    (key) => normalizedComparableText(candidate?.[key]) === normalizedComparableText(previous?.[key]),
+  );
+}
+
+function unexpectedOutputKeys(value, allowedKeys, path, warnings) {
+  const extras = extraKeys(value, allowedKeys);
+  if (extras.length) warnings.push(`${path} ignored unexpected fields: ${extras.join(", ")}`);
+}
+
+function outputAction(value) {
+  return typeof value?.action === "string" ? value.action.trim() : "";
+}
+
+function materializeSingletonOutput({
+  value,
+  previous,
+  path,
+  llmKeys,
+  canonicalKeys,
+  sourceMessageId,
+  warnings,
+  latestChangeMaximum = 0,
+}) {
+  if (!isPlainObject(value)) return value;
+  unexpectedOutputKeys(value, llmKeys, path, warnings);
+  const action = outputAction(value);
+  if (action === "preserve") return structuredClone(previous);
+  if (action !== "update") {
+    warnings.push(`${path}.action must be preserve or update; preserved the previous section`);
+    return structuredClone(previous);
+  }
+  if (!sourceMessageId) {
+    warnings.push(`${path}.action was update without a current assistant source; preserved the previous section`);
+    return structuredClone(previous);
+  }
+  if (latestChangeMaximum) {
+    const latestChange = recoverText(
+      value.latestChange,
+      latestChangeMaximum,
+      { allowEmpty: true },
+    );
+    if (!latestChange) {
+      warnings.push(`${path}.latestChange must describe an update; preserved the previous section`);
+      return structuredClone(previous);
+    }
+  }
+  return Object.fromEntries(
+    canonicalKeys.map((key) => [
+      key,
+      key === "sourceMessageId" ? sourceMessageId : value[key],
+    ]),
+  );
+}
+
+function materializeListOutput({
+  value,
+  previous,
+  path,
+  llmKeys,
+  canonicalKeys,
+  comparableKeys,
+  sourceMessageId,
+  warnings,
+}) {
+  if (!Array.isArray(value)) return value;
+  const recovered = [];
+  const usedPrevious = new Set();
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (!isPlainObject(item)) return value;
+    unexpectedOutputKeys(item, llmKeys, `${path}[${index}]`, warnings);
+    const action = outputAction(item);
+    if (action === "preserve") {
+      const previousIndex = previous.findIndex(
+        (prior, priorIndex) =>
+          !usedPrevious.has(priorIndex) && matchesPreviousItem(item, prior, comparableKeys),
+      );
+      if (previousIndex < 0) {
+        warnings.push(
+          `${path}[${index}].action was preserve but no exact previous item matched; preserved the previous list`,
+        );
+        return structuredClone(previous);
+      }
+      usedPrevious.add(previousIndex);
+      recovered.push(structuredClone(previous[previousIndex]));
+      continue;
+    }
+    if (action !== "update") {
+      warnings.push(`${path}[${index}].action must be preserve or update; preserved the previous list`);
+      return structuredClone(previous);
+    }
+    if (!sourceMessageId) {
+      warnings.push(`${path}[${index}].action was update without a current assistant source; preserved the previous list`);
+      return structuredClone(previous);
+    }
+    recovered.push(Object.fromEntries(
+      canonicalKeys.map((key) => [
+        key,
+        key === "sourceMessageId" ? sourceMessageId : item[key],
+      ]),
+    ));
+  }
+  return recovered;
+}
+
+/** Convert the provider action protocol into canonical schema-v4 provenance. */
+export function materializeTrackerOutputDetailed(candidate, options = {}) {
+  const warnings = [];
+  if (!isPlainObject(candidate) || !isPlainObject(candidate.scene) || !isPlainObject(candidate.arc)) {
+    return { candidate, warnings };
+  }
+  const previous = previousOrEmpty(options.previousState);
+  const sourceMessageId = String(options.sourceMessageId ?? "").trim();
+  const materialized = structuredClone(candidate);
+  materialized.scene.lifecycle = materializeSingletonOutput({
+    value: candidate.scene.lifecycle,
+    previous: previous.scene.lifecycle,
+    path: "scene.lifecycle",
+    llmKeys: LLM_LIFECYCLE_KEYS,
+    canonicalKeys: LIFECYCLE_KEYS,
+    sourceMessageId,
+    warnings,
+  });
+  materialized.arc.lifecycle = materializeSingletonOutput({
+    value: candidate.arc.lifecycle,
+    previous: previous.arc.lifecycle,
+    path: "arc.lifecycle",
+    llmKeys: LLM_LIFECYCLE_KEYS,
+    canonicalKeys: LIFECYCLE_KEYS,
+    sourceMessageId,
+    warnings,
+  });
+  materialized.arc.npcs = materializeListOutput({
+    value: candidate.arc.npcs,
+    previous: previous.arc.npcs,
+    path: "arc.npcs",
+    llmKeys: LLM_NPC_KEYS,
+    canonicalKeys: NPC_KEYS,
+    comparableKeys: NPC_KEYS.filter((key) => key !== "sourceMessageId"),
+    sourceMessageId,
+    warnings,
+  });
+  materialized.arc.relationship = materializeSingletonOutput({
+    value: candidate.arc.relationship,
+    previous: previous.arc.relationship,
+    path: "arc.relationship",
+    llmKeys: LLM_RELATIONSHIP_KEYS,
+    canonicalKeys: RELATIONSHIP_KEYS,
+    sourceMessageId,
+    warnings,
+    latestChangeMaximum: 1_000,
+  });
+  materialized.arc.response = materializeSingletonOutput({
+    value: candidate.arc.response,
+    previous: previous.arc.response,
+    path: "arc.response",
+    llmKeys: LLM_RESPONSE_KEYS,
+    canonicalKeys: RESPONSE_KEYS,
+    sourceMessageId,
+    warnings,
+    latestChangeMaximum: 700,
+  });
+  materialized.arc.objectives = materializeListOutput({
+    value: candidate.arc.objectives,
+    previous: previous.arc.objectives,
+    path: "arc.objectives",
+    llmKeys: LLM_OBJECTIVE_KEYS,
+    canonicalKeys: OBJECTIVE_KEYS,
+    comparableKeys: OBJECTIVE_KEYS.filter((key) => key !== "sourceMessageId"),
+    sourceMessageId,
+    warnings,
+  });
+  return { candidate: materialized, warnings };
+}
+
+export function recoverTrackerOutputDetailed(candidate, options = {}) {
+  const materialized = materializeTrackerOutputDetailed(candidate, options);
+  const recovered = recoverTrackerStateDetailed(materialized.candidate, options);
+  return {
+    ...recovered,
+    warnings: [...materialized.warnings, ...(recovered.warnings ?? [])],
+  };
 }
 
 export function recoverTrackerStateDetailed(candidate, options = {}) {
@@ -916,6 +1165,143 @@ export const TRACKER_JSON_SCHEMA = Object.freeze({
               OBJECTIVE_KEYS.map((key) => [key, providerStringSchema()]),
             ),
             required: OBJECTIVE_KEYS,
+          },
+        },
+      },
+      required: ARC_KEYS,
+    },
+  },
+  required: ROOT_KEYS,
+});
+
+/**
+ * Provider-only action protocol. It intentionally mirrors canonical schema-v4
+ * paths while replacing opaque sourceMessageId fields with preserve/update
+ * actions. Backend materialization restores canonical provenance.
+ */
+export const TRACKER_OUTPUT_JSON_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    schemaVersion: { type: "integer", const: TRACKER_SCHEMA_VERSION },
+    scene: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        date: providerStringSchema(),
+        time: providerStringSchema(),
+        weather: providerStringSchema(),
+        location: providerStringSchema(),
+        immediateContext: providerStringSchema(),
+        lifecycle: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            status: providerStringSchema(),
+            reason: providerStringSchema(),
+            action: providerActionSchema(),
+          },
+          required: LLM_LIFECYCLE_KEYS,
+        },
+        womanStable: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            WOMAN_STABLE_KEYS.map((key) => [key, providerStringSchema()]),
+          ),
+          required: WOMAN_STABLE_KEYS,
+        },
+        womanCurrent: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            WOMAN_KEYS.map((key) => [key, providerStringSchema()]),
+          ),
+          required: WOMAN_KEYS,
+        },
+        manVisible: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            MAN_VISIBLE_KEYS.map((key) => [key, providerStringSchema()]),
+          ),
+          required: MAN_VISIBLE_KEYS,
+        },
+        spatial: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            SPATIAL_KEYS.map((key) => [key, providerStringSchema()]),
+          ),
+          required: SPATIAL_KEYS,
+        },
+      },
+      required: SCENE_KEYS,
+    },
+    arc: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        lifecycle: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            status: providerStringSchema(),
+            reason: providerStringSchema(),
+            action: providerActionSchema(),
+          },
+          required: LLM_LIFECYCLE_KEYS,
+        },
+        npcs: {
+          type: "array",
+          maxItems: 24,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: Object.fromEntries(
+              LLM_NPC_KEYS.map((key) => [
+                key,
+                key === "action" ? providerActionSchema() : providerStringSchema(),
+              ]),
+            ),
+            required: LLM_NPC_KEYS,
+          },
+        },
+        relationship: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            LLM_RELATIONSHIP_KEYS.map((key) => [
+              key,
+              key === "action" ? providerActionSchema() : providerStringSchema(),
+            ]),
+          ),
+          required: LLM_RELATIONSHIP_KEYS,
+        },
+        response: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            LLM_RESPONSE_KEYS.map((key) => [
+              key,
+              key === "action" ? providerActionSchema() : providerStringSchema(),
+            ]),
+          ),
+          required: LLM_RESPONSE_KEYS,
+        },
+        objectives: {
+          type: "array",
+          maxItems: 3,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: Object.fromEntries(
+              LLM_OBJECTIVE_KEYS.map((key) => [
+                key,
+                key === "action" ? providerActionSchema() : providerStringSchema(),
+              ]),
+            ),
+            required: LLM_OBJECTIVE_KEYS,
           },
         },
       },

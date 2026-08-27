@@ -2,7 +2,7 @@
 
 The extension is split into five small modules:
 
-- `schemas.js`: strict current-scene and current-arc schema, lifecycle and provenance validation, private-response validation, and conservative schema-v1/v2/v3 upgrade.
+- `schemas.js`: strict canonical current-scene/current-arc schema, provider action schema, action-to-provenance materialization, lifecycle/private-response validation, and conservative schema-v1/v2/v3 upgrade.
 - `state.js`: capsule parsing, branch fingerprints, checkpoint selection, prompt compaction, and canonical injection through a private compact prompt projection.
 - `tracker.js`: provider-aware quiet generation, prompts, JSON extraction, and validation.
 - `backend.js`: storage, queues, event reconciliation, migration, variable mirrors, readiness, and prompt interception.
@@ -22,7 +22,7 @@ Scene lifecycle and arc lifecycle are separate replacement-state fields. The cur
 
 ## Update transaction
 
-For each eligible assistant turn, the backend generates a complete replacement state, validates it, rereads the selected branch, compares its prefix fingerprint, and only then saves a checkpoint. Failed or stale results do not mutate current state. Private response changes require the same source-message linkage as material relationship changes.
+For each eligible assistant turn, the backend generates a complete action-marked replacement state, materializes it into canonical schema v4, validates it, rereads the selected branch, compares its prefix fingerprint, and only then saves a checkpoint. Failed or stale results do not mutate current state. The provider sees no source-message identifiers: `preserve` copies prior canonical provenance, while `update` receives the current assistant source in backend code. Relationship and private-response updates additionally require a nonempty `latestChange` summary.
 
 Queues serialize updates per chat while allowing different chats to proceed independently. Prompt interception waits for the selected turn's bounded reconciliation and then injects the newest committed state.
 
@@ -36,9 +36,9 @@ The card wraps its chat-variable fallback in `date_simulator_saved_case_fallback
 
 ## Trust boundaries
 
-The public transcript is untrusted tracker input. State fields reject HTML comments and Date Simulator XML-like envelopes. Strict key sets, length bounds, list caps, and source-message checks reduce accidental prompt/state injection. The interceptor marks injected data as private and the card separately forbids exposing it.
+The public transcript is untrusted tracker input. State fields reject HTML comments and Date Simulator XML-like envelopes. Strict key sets, length bounds, list caps, action validation, backend-owned provenance, and final canonical source checks reduce accidental prompt/state injection. The interceptor marks injected data as private and the card separately forbids exposing it.
 
-Canonical extension storage, checkpoints, chat-variable mirrors, tracker generation, migrations, and opt-in private inspection retain the complete schema-v4 JSON object. The late interceptor derives a one-way private prompt projection from that validated object: it preserves every established scene, arc, relationship, private-response, NPC, and objective value while omitting provenance identifiers, empty collections, and known unknown/default values. The projection defines omitted fields as unknown or empty and is never parsed back into canonical state.
+Canonical extension storage, checkpoints, chat-variable mirrors, migrations, and opt-in private inspection retain the complete schema-v4 JSON object. Tracker generation uses a separate provider schema with the same outer paths and `action` in place of every `sourceMessageId`; the previous provider state is likewise stripped of provenance before generation. Backend materialization is the only bridge from that action protocol to canonical provenance. The late interceptor derives a one-way private prompt projection from the validated canonical object: it preserves every established scene, arc, relationship, private-response, NPC, and objective value while omitting provenance identifiers, empty collections, and known unknown/default values. The projection defines omitted fields as unknown or empty and is never parsed back into canonical state.
 
 The tracker has no chat-mutation capability itself. Only the backend commits validated state, and it verifies the branch immediately before doing so.
 

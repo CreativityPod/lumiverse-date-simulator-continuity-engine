@@ -1,8 +1,8 @@
 import {
-  TRACKER_JSON_SCHEMA,
+  TRACKER_OUTPUT_JSON_SCHEMA,
   TRACKER_SCHEMA_VERSION,
-  cloneEmptyState,
-  recoverTrackerStateDetailed,
+  recoverTrackerOutputDetailed,
+  trackerStateForLlm,
   trackerSourceMessageIds,
 } from "./schemas.js";
 
@@ -27,7 +27,7 @@ Hard rules:
 - Record consequences of the supplied turn; never create new dialogue, actions, events, NPC activity, promises, consent, or public story developments.
 - Preserve an established value unless the new turn directly changes or corrects it. Use "Unknown" instead of guessing.
 - scene.date and scene.time are the fictional narrative clock, never wall-clock time. Ignore message timestamps, response delay, generation latency, and how long the user waited in real life. Advance narrative time by the duration explicitly stated or conservatively implied by completed public dialogue and action, including a small plausible advance for exchanges that clearly consume time. Narratively implied passage counts as a supported direct change to date/time even when nobody states a clock value. Preserve approximate wording when exact precision is unavailable, do not advance for a purely observational or analytical command, and update the date when narrated time crosses midnight.
-- scene.lifecycle records only whether the current scene is active or ended. arc.lifecycle separately records whether the larger relationship arc is active or ended. A scene may end while its arc remains active because a future meeting or continuing connection is established. Preserve each lifecycle reason and sourceMessageId unless that lifecycle changes; on change, use only the supplied assistant message id. Starting a later scene replaces the prior current scene and sets scene.lifecycle to active without creating scene history.
+- scene.lifecycle records only whether the current scene is active or ended. arc.lifecycle separately records whether the larger relationship arc is active or ended. A scene may end while its arc remains active because a future meeting or continuing connection is established. For each lifecycle use action "preserve" unless its status or reason changes; use action "update" when it changes. Starting a later scene replaces the prior current scene and sets scene.lifecycle to active without creating scene history.
 - The user controls the man. Never invent his thoughts, feelings, motives, attraction, consent, body, outfit, position, or voluntary action. You may record only facts the user explicitly established or direct physical consequences already narrated.
 - womanStable contains stable observable appearance copied conservatively from the stable case and public opening: face structure and enduring facial features; visible eye color, shape, and other enduring eye traits; visible skin tone, complexion, and enduring marks; and nonsexualized body type, frame, and proportions. Preserve these fields unless the transcript explicitly corrects them or establishes a plausible lasting change. Never infer a trait from ethnicity, ancestry, nationality, culture, personality, clothing, or attraction; use "Unknown" for anything the case and public scene do not establish.
 - womanCurrent contains only temporary hair/grooming, dress/layer state, physical condition, and current mental state or immediate intent. Expressions, makeup, temporary skin changes, posture, weight change, and other current or changing presentation belong here or in spatial when supported; do not overwrite womanStable with them.
@@ -37,24 +37,22 @@ Hard rules:
 - Update private response only when the stable profile plus canonical observable interaction directly supports a conservative change. Change only affected dimensions, normally by one qualitative step; use mixed or uncertain language when evidence conflicts. This records private continuity and does not create a public event.
 - Consent is action-specific and is never a response field or an inference from attraction, comfort, prior willingness, clothing, physiology, or silence. Teen Mode sexualInterest must be "Not applicable in Teen Mode."
 - Never use numbers, points, percentages, scores, or game meters in private response fields. Never convert private response into visible behavior unless the public turn independently established that behavior.
-- NPCS includes named or plausibly recurring NPCs only. Preserve active recurring NPCs. Do not add incidental staff or passersby. When an NPC is added or materially updated, use the supplied assistant message id; otherwise preserve sourceMessageId.
-- OBJECTIVES contains at most three immediate plans, commitments, pressures, or intended next steps. timing records an established deadline, planned date, or practical window, otherwise "Unknown". Never infer an objective for the man unless he stated it. When an objective is added or materially updated, use the supplied assistant message id; otherwise preserve sourceMessageId.
-- If no relationship change occurred, preserve relationship.latestChange and its sourceMessageId exactly. If one occurred, write one concise change and use the supplied assistant message id.
-- If no private-response dimension changed, preserve response.latestChange and its sourceMessageId exactly. If supported response changed, summarize only the changed dimensions and use the supplied assistant message id.
+- NPCS includes named or plausibly recurring NPCs only. Return the complete current NPC list. For each exactly unchanged NPC copy its fields and use action "preserve". For a new or materially updated NPC use action "update". Omit an NPC only when it is no longer plausibly recurring. Do not add incidental staff or passersby.
+- OBJECTIVES contains at most three immediate plans, commitments, pressures, or intended next steps. Return the complete current objective list. timing records an established deadline, planned date, or practical window, otherwise "Unknown". Never infer an objective for the man unless he stated it. For each exactly unchanged objective copy its fields and use action "preserve". For a new or materially updated objective use action "update". Omit an objective only when it no longer belongs in the current list.
+- If no relationship field changed, copy the prior relationship fields and latestChange and use action "preserve". If a relationship field changed, use action "update" and write one concise nonempty latestChange summary.
+- If no private-response dimension changed, copy the prior response fields and latestChange and use action "preserve". If a supported response dimension changed, use action "update" and write one concise nonempty latestChange summarizing only the changed dimensions.
+- action is processing metadata, not story state. Use only "preserve" or "update". Never return sourceMessageId; provenance is assigned by the extension after generation.
 - Return only the JSON object required by the schema. No markdown or commentary.
 
 Required JSON shape (every shown property is required; npcs and objectives may be empty arrays):
-{"schemaVersion":4,"scene":{"date":"string","time":"string","weather":"string","location":"string","immediateContext":"string","lifecycle":{"status":"active or ended","reason":"string or empty","sourceMessageId":"matching id or empty"},"womanStable":{"face":"string","eyes":"string","skin":"string","bodyTypeAndProportions":"string"},"womanCurrent":{"hairAndGrooming":"string","dress":"string","physicalState":"string","mentalState":"string"},"manVisible":{"appearance":"string","dressAndLayers":"string","physicalState":"string"},"spatial":{"womanPosition":"string","manPosition":"string","proximityAndContact":"string","importantItems":"string"}},"arc":{"lifecycle":{"status":"active or ended","reason":"string or empty","sourceMessageId":"matching id or empty"},"npcs":[{"name":"string","role":"string","relationship":"string","currentStatus":"string","immediateObjective":"string","sourceMessageId":"matching id or empty"}],"relationship":{"establishedStatus":"string","womanPosture":"string","activeBoundaryOrConcern":"string","latestChange":"string or empty","sourceMessageId":"matching id or empty"},"response":{"availableAttention":"string","comfortAndSafety":"string","rapportAndTrust":"string","physicalAttraction":"string","personalInterest":"string","romanticInterest":"string","sexualInterest":"string","willingnessToContinue":"string","contactExchangeInterest":"string","desireToLeave":"string","activeUncertainty":"string","latestChange":"string or empty","sourceMessageId":"matching id or empty"},"objectives":[{"owner":"string","objective":"string","status":"string","timing":"string","sourceMessageId":"matching id or empty"}]}}`;
+{"schemaVersion":4,"scene":{"date":"string","time":"string","weather":"string","location":"string","immediateContext":"string","lifecycle":{"status":"active or ended","reason":"string or empty","action":"preserve or update"},"womanStable":{"face":"string","eyes":"string","skin":"string","bodyTypeAndProportions":"string"},"womanCurrent":{"hairAndGrooming":"string","dress":"string","physicalState":"string","mentalState":"string"},"manVisible":{"appearance":"string","dressAndLayers":"string","physicalState":"string"},"spatial":{"womanPosition":"string","manPosition":"string","proximityAndContact":"string","importantItems":"string"}},"arc":{"lifecycle":{"status":"active or ended","reason":"string or empty","action":"preserve or update"},"npcs":[{"name":"string","role":"string","relationship":"string","currentStatus":"string","immediateObjective":"string","action":"preserve or update"}],"relationship":{"establishedStatus":"string","womanPosture":"string","activeBoundaryOrConcern":"string","latestChange":"string or empty","action":"preserve or update"},"response":{"availableAttention":"string","comfortAndSafety":"string","rapportAndTrust":"string","physicalAttraction":"string","personalInterest":"string","romanticInterest":"string","sexualInterest":"string","willingnessToContinue":"string","contactExchangeInterest":"string","desireToLeave":"string","activeUncertainty":"string","latestChange":"string or empty","action":"preserve or update"},"objectives":[{"owner":"string","objective":"string","status":"string","timing":"string","action":"preserve or update"}]}}`;
 
-function trackerUserPrompt({ caseText, previousState, userText, assistantText, sourceMessageId }) {
-  return `ASSISTANT MESSAGE ID
-${sourceMessageId}
-
-STABLE PRIVATE CASE
+function trackerUserPrompt({ caseText, previousState, userText, assistantText }) {
+  return `STABLE PRIVATE CASE
 ${caseText}
 
-PREVIOUS TRACKER STATE
-${JSON.stringify(previousState ?? cloneEmptyState())}
+PREVIOUS TRACKER STATE (provenance removed; existing actions are preserve markers)
+${JSON.stringify(trackerStateForLlm(previousState))}
 
 NEW USER TURN
 ${userText || "[No preceding user turn; this is the generated opening.]"}
@@ -65,11 +63,8 @@ ${assistantText}
 Produce schemaVersion ${TRACKER_SCHEMA_VERSION} state now.`;
 }
 
-function migrationUserPrompt({ caseText, legacySceneText, transcript, sourceMessageId }) {
+function migrationUserPrompt({ caseText, legacySceneText, transcript }) {
   return `This is an explicit migration from Date Simulator v1.3.1. Build one conservative current tracker state from the saved case, latest legacy scene, and selected recent transcript. Do not add facts that are absent or resolve ambiguous relationship or private-response state.
-
-ASSISTANT MESSAGE ID
-${sourceMessageId}
 
 STABLE PRIVATE CASE
 ${caseText}
@@ -127,7 +122,7 @@ function generationParameters(connection, outputMode = DEFAULT_TRACKER_OUTPUT_MO
   const base = { temperature: 0, top_p: 0.1, max_tokens: DEFAULT_TRACKER_MAX_TOKENS };
   const mode = resolveOutputMode(connection, outputMode);
   if (mode === "google") {
-    return { ...base, responseMimeType: "application/json", responseSchema: TRACKER_JSON_SCHEMA };
+    return { ...base, responseMimeType: "application/json", responseSchema: TRACKER_OUTPUT_JSON_SCHEMA };
   }
   if (mode === "openai") {
     return {
@@ -137,7 +132,7 @@ function generationParameters(connection, outputMode = DEFAULT_TRACKER_OUTPUT_MO
         json_schema: {
           name: "date_simulator_continuity_state",
           strict: true,
-          schema: TRACKER_JSON_SCHEMA,
+          schema: TRACKER_OUTPUT_JSON_SCHEMA,
         },
       },
     };
@@ -157,7 +152,7 @@ function generationTools(connection, outputMode = DEFAULT_TRACKER_OUTPUT_MODE) {
     {
       name: "record_date_simulator_state",
       description: "Return the complete validated Date Simulator continuity state.",
-      parameters: TRACKER_JSON_SCHEMA,
+      parameters: TRACKER_OUTPUT_JSON_SCHEMA,
     },
   ];
 }
@@ -218,8 +213,9 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       : extractJson(toolState ?? response?.content);
     return {
       parsed,
-      validation: recoverTrackerStateDetailed(parsed, {
+      validation: recoverTrackerOutputDetailed(parsed, {
         previousState,
+        sourceMessageId,
         allowedSourceMessageIds,
         teenMode: /\bTeen Mode\b/i.test(String(caseText ?? "")),
       }),
@@ -237,7 +233,7 @@ async function generateCandidate(spindleApi, messages, config, sourceMessageId, 
       content: `Repair the rejected tracker object because: ${validation.error}.
 
 Return one complete replacement object. It must conform to this JSON Schema:
-${JSON.stringify(TRACKER_JSON_SCHEMA)}
+${JSON.stringify(TRACKER_OUTPUT_JSON_SCHEMA)}
 
 Preserve canonical facts, use Unknown rather than guessing, and return no prose or markdown.`,
     };

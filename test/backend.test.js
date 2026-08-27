@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { cloneEmptyState } from "../src/schemas.js";
+import { cloneEmptyState, trackerStateForLlm } from "../src/schemas.js";
 
 const CASE = `CASE: DS-V14-BACKEND; Date Simulator v1.4; Adult Mode; cafe.
 MAN: Adult; appearance Unknown.
@@ -59,7 +59,7 @@ test("background reconciliation saves state and the interceptor injects one bran
     generate: {
       quiet: async (input) => {
         generatedUsers.push(input.userId);
-        return { content: JSON.stringify(cloneEmptyState()) };
+        return { content: JSON.stringify(trackerStateForLlm(null)) };
       },
     },
     registerInterceptor: (handler, priority) => {
@@ -324,7 +324,7 @@ test("saves the private profile before tracker completion and blocks the next pr
       quiet: async () => {
         markGenerationStarted();
         await generationGate;
-        return { content: JSON.stringify(cloneEmptyState()), finish_reason: "stop" };
+        return { content: JSON.stringify(trackerStateForLlm(null)), finish_reason: "stop" };
       },
     },
     registerInterceptor: (handler) => { interceptor = handler; },
