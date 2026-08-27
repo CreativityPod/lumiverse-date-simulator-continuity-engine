@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   TRACKER_JSON_SCHEMA,
+  TRACKER_OUTPUT_JSON_SCHEMA,
   cloneEmptyState,
+  recoverTrackerOutputDetailed,
   recoverTrackerStateDetailed,
+  trackerStateForLlm,
   upgradeTrackerState,
   validateTrackerState,
   validateTrackerStateDetailed,
@@ -231,7 +234,7 @@ test("enforces the nonsexual private-response value in Teen Mode", () => {
   assert.match(recovered.warnings.join("; "), /Teen Mode nonsexual value/);
 });
 
-test("provider schema avoids regex and bounded-repetition grammar traps", () => {
+test("canonical and provider schemas avoid regex and bounded-repetition grammar traps", () => {
   const objective = TRACKER_JSON_SCHEMA.properties.arc.properties.objectives.items.properties;
   assert.deepEqual(objective.owner, { type: "string" });
   assert.deepEqual(objective.objective, { type: "string" });
@@ -240,6 +243,176 @@ test("provider schema avoids regex and bounded-repetition grammar traps", () => 
   assert.deepEqual(objective.sourceMessageId, { type: "string" });
   const encoded = JSON.stringify(TRACKER_JSON_SCHEMA);
   assert.doesNotMatch(encoded, /"pattern"|"minLength"|"maxLength"/);
+  assert.doesNotMatch(
+    JSON.stringify(TRACKER_OUTPUT_JSON_SCHEMA),
+    /"pattern"|"minLength"|"maxLength"/,
+  );
+});
+
+test("LLM-facing schema preserves paths while replacing provenance ids with actions", () => {
+  const sceneLifecycle = TRACKER_OUTPUT_JSON_SCHEMA.properties.scene.properties.lifecycle.properties;
+  const arc = TRACKER_OUTPUT_JSON_SCHEMA.properties.arc.properties;
+  assert.deepEqual(sceneLifecycle.action, { type: "string", enum: ["preserve", "update"] });
+  assert.equal(sceneLifecycle.sourceMessageId, undefined);
+  assert.ok(arc.lifecycle.properties.action);
+  assert.ok(arc.npcs.items.properties.action);
+  assert.ok(arc.relationship.properties.action);
+  assert.ok(arc.response.properties.action);
+  assert.ok(arc.objectives.items.properties.action);
+  assert.doesNotMatch(JSON.stringify(TRACKER_OUTPUT_JSON_SCHEMA), /sourceMessageId|previousIndex/);
+});
+
+test("provider previous state removes every source id without changing schema paths", () => {
+  const previous = cloneEmptyState();
+  previous.scene.lifecycle.sourceMessageId = "scene-source";
+  previous.arc.lifecycle.sourceMessageId = "arc-source";
+  previous.arc.relationship.latestChange = "Relationship changed.";
+  previous.arc.relationship.sourceMessageId = "relationship-source";
+  previous.arc.response.latestChange = "Response changed.";
+  previous.arc.response.sourceMessageId = "response-source";
+  previous.arc.npcs.push({
+    name: "Nia",
+    role: "Friend",
+    relationship: "Woman's friend",
+    currentStatus: "At the cafe",
+    immediateObjective: "Finish lunch",
+    sourceMessageId: "npc-source",
+  });
+  previous.arc.objectives.push({
+    owner: "Nia",
+    objective: "Finish lunch",
+    status: "active",
+    timing: "Before closing",
+    sourceMessageId: "objective-source",
+  });
+  const output = trackerStateForLlm(previous);
+  assert.equal(output.scene.lifecycle.action, "preserve");
+  assert.equal(output.arc.npcs[0].action, "preserve");
+  assert.equal(output.arc.objectives[0].action, "preserve");
+  assert.doesNotMatch(JSON.stringify(output), /sourceMessageId|scene-source|npc-source/);
+  assert.deepEqual(Object.keys(output.scene), Object.keys(previous.scene));
+  assert.deepEqual(Object.keys(output.arc), Object.keys(previous.arc));
+});
+
+test("backend assigns the current source for updates at all six sourced locations", () => {
+  const previous = cloneEmptyState();
+  previous.arc.npcs.push({
+    name: "Nia",
+    role: "Friend",
+    relationship: "Woman's friend",
+    currentStatus: "At the cafe",
+    immediateObjective: "Finish lunch",
+    sourceMessageId: "prior-npc",
+  });
+  previous.arc.objectives.push({
+    owner: "Nia",
+    objective: "Finish lunch",
+    status: "active",
+    timing: "Before closing",
+    sourceMessageId: "prior-objective",
+  });
+  const output = trackerStateForLlm(previous);
+  output.scene.lifecycle = {
+    status: "ended",
+    reason: "The cafe meeting concluded.",
+    action: "update",
+  };
+  output.arc.lifecycle = {
+    status: "ended",
+    reason: "No continuing connection remains.",
+    action: "update",
+  };
+  output.arc.npcs[0].currentStatus = "Leaving the cafe";
+  output.arc.npcs[0].action = "update";
+  output.arc.relationship.womanPosture = "More distant";
+  output.arc.relationship.latestChange = "Her posture became more distant.";
+  output.arc.relationship.action = "update";
+  output.arc.response.personalInterest = "Low";
+  output.arc.response.latestChange = "Personal interest decreased.";
+  output.arc.response.action = "update";
+  output.arc.objectives[0].status = "completed";
+  output.arc.objectives[0].action = "update";
+
+  const recovered = recoverTrackerOutputDetailed(output, {
+    previousState: previous,
+    sourceMessageId: "assistant-current",
+    allowedSourceMessageIds: ["assistant-current", "prior-npc", "prior-objective"],
+  });
+  assert.ok(recovered.state);
+  assert.equal(recovered.warnings.length, 0);
+  assert.equal(recovered.state.scene.lifecycle.sourceMessageId, "assistant-current");
+  assert.equal(recovered.state.arc.lifecycle.sourceMessageId, "assistant-current");
+  assert.equal(recovered.state.arc.npcs[0].sourceMessageId, "assistant-current");
+  assert.equal(recovered.state.arc.relationship.sourceMessageId, "assistant-current");
+  assert.equal(recovered.state.arc.response.sourceMessageId, "assistant-current");
+  assert.equal(recovered.state.arc.objectives[0].sourceMessageId, "assistant-current");
+});
+
+test("preserve actions retain canonical sections and exact list-item provenance", () => {
+  const previous = cloneEmptyState();
+  previous.scene.lifecycle = {
+    status: "ended",
+    reason: "The scene ended earlier.",
+    sourceMessageId: "prior-scene",
+  };
+  previous.arc.relationship.latestChange = "She accepted another date.";
+  previous.arc.relationship.sourceMessageId = "prior-relationship";
+  previous.arc.response.latestChange = "Trust increased.";
+  previous.arc.response.sourceMessageId = "prior-response";
+  previous.arc.npcs.push({
+    name: "Nia",
+    role: "Friend",
+    relationship: "Woman's friend",
+    currentStatus: "At the cafe",
+    immediateObjective: "Finish lunch",
+    sourceMessageId: "prior-npc",
+  });
+  const output = trackerStateForLlm(previous);
+  output.scene.lifecycle.status = "active";
+  output.scene.lifecycle.reason = "";
+  output.arc.relationship.latestChange = "";
+  output.arc.response.latestChange = "";
+
+  const recovered = recoverTrackerOutputDetailed(output, {
+    previousState: previous,
+    sourceMessageId: "assistant-current",
+    allowedSourceMessageIds: [
+      "assistant-current",
+      "prior-scene",
+      "prior-relationship",
+      "prior-response",
+      "prior-npc",
+    ],
+  });
+  assert.deepEqual(recovered.state.scene.lifecycle, previous.scene.lifecycle);
+  assert.deepEqual(recovered.state.arc.relationship, previous.arc.relationship);
+  assert.deepEqual(recovered.state.arc.response, previous.arc.response);
+  assert.deepEqual(recovered.state.arc.npcs, previous.arc.npcs);
+});
+
+test("empty update summaries and legacy LLM source ids recover without dangling provenance", () => {
+  const previous = cloneEmptyState();
+  previous.arc.relationship.latestChange = "She exchanged phone numbers.";
+  previous.arc.relationship.sourceMessageId = "prior-change";
+  previous.arc.response.latestChange = "Interest increased.";
+  previous.arc.response.sourceMessageId = "prior-response";
+  const output = trackerStateForLlm(previous);
+  output.arc.relationship.action = "update";
+  output.arc.relationship.latestChange = "";
+  output.arc.relationship.sourceMessageId = "prior-change";
+  output.arc.response.latestChange = "";
+  output.arc.response.sourceMessageId = "prior-response";
+
+  const recovered = recoverTrackerOutputDetailed(output, {
+    previousState: previous,
+    sourceMessageId: "assistant-current",
+    allowedSourceMessageIds: ["assistant-current", "prior-change", "prior-response"],
+  });
+  assert.deepEqual(recovered.state.arc.relationship, previous.arc.relationship);
+  assert.deepEqual(recovered.state.arc.response, previous.arc.response);
+  assert.match(recovered.warnings.join("; "), /latestChange must describe an update/);
+  assert.match(recovered.warnings.join("; "), /ignored unexpected fields: sourceMessageId/);
+  assert.doesNotMatch(recovered.warnings.join("; "), /source linkage was invalid/);
 });
 
 test("allows a prior relationship change to persist on a no-change turn", () => {

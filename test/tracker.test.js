@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { cloneEmptyState } from "../src/schemas.js";
+import { cloneEmptyState, trackerStateForLlm } from "../src/schemas.js";
 import { runTracker, trackerTest } from "../src/tracker.js";
 
 test("extracts raw and fenced JSON conservatively", () => {
@@ -10,16 +10,20 @@ test("extracts raw and fenced JSON conservatively", () => {
   assert.equal(trackerTest.extractJson("not json"), null);
 });
 
-test("tracker prompt contains the source id and agency constraints", () => {
+test("tracker prompt removes source ids and retains agency constraints", () => {
+  const previousState = cloneEmptyState();
+  previousState.arc.relationship.latestChange = "She accepted another date.";
+  previousState.arc.relationship.sourceMessageId = "a-prior";
   const prompt = trackerTest.trackerUserPrompt({
     caseText: "CASE",
-    previousState: cloneEmptyState(),
+    previousState,
     userText: "I wave.",
     assistantText: "She waves back.",
     sourceMessageId: "a1",
   });
-  assert.match(prompt, /a1/);
+  assert.doesNotMatch(prompt, /a1|a-prior|sourceMessageId/);
   assert.match(prompt, /She waves back/);
+  assert.match(prompt, /"action":"preserve"/);
   assert.match(trackerTest.systemPrompt, /physicalAttraction/);
   assert.match(trackerTest.systemPrompt, /Consent is action-specific/);
   assert.match(trackerTest.systemPrompt, /womanStable/);
@@ -27,7 +31,8 @@ test("tracker prompt contains the source id and agency constraints", () => {
   assert.match(trackerTest.systemPrompt, /fictional narrative clock, never wall-clock time/);
   assert.match(trackerTest.systemPrompt, /how long the user waited in real life/);
   assert.match(trackerTest.systemPrompt, /"lifecycle":\{"status":"active or ended"/);
-  assert.match(trackerTest.systemPrompt, /"timing":"string","sourceMessageId":"matching id or empty"/);
+  assert.match(trackerTest.systemPrompt, /"timing":"string","action":"preserve or update"/);
+  assert.match(trackerTest.systemPrompt, /Never return sourceMessageId/);
 });
 
 test("tracker timeout fits inside the five-minute interceptor budget", () => {
@@ -62,6 +67,7 @@ test("uses native structured output only for recognized providers", () => {
 
 test("retries one rejected tracker response with the validation reason", async () => {
   const state = cloneEmptyState();
+  const output = trackerStateForLlm(state);
   const requests = [];
   const spindleApi = {
     connections: {
@@ -73,7 +79,7 @@ test("retries one rejected tracker response with the validation reason", async (
         requests.push(input);
         return requests.length === 1
           ? { content: '{"schemaVersion":4}', finish_reason: "stop" }
-          : { content: JSON.stringify(state), finish_reason: "stop" };
+          : { content: JSON.stringify(output), finish_reason: "stop" };
       },
     },
   };
@@ -99,6 +105,7 @@ test("retries one rejected tracker response with the validation reason", async (
 test("repairs a structurally empty state instead of treating defaults as an update", async () => {
   const state = cloneEmptyState();
   state.scene.location = "Station concourse";
+  const output = trackerStateForLlm(state);
   const requests = [];
   const spindleApi = {
     connections: { list: async () => [{ id: "local", provider: "openai-compatible", is_default: true }] },
@@ -107,7 +114,7 @@ test("repairs a structurally empty state instead of treating defaults as an upda
         requests.push(input);
         return requests.length === 1
           ? { content: '{"schemaVersion":4,"scene":{},"arc":{}}', finish_reason: "stop" }
-          : { content: JSON.stringify(state), finish_reason: "stop" };
+          : { content: JSON.stringify(output), finish_reason: "stop" };
       },
     },
   };
@@ -137,9 +144,10 @@ test("accepts a conservative objective fallback without a second model call", as
     timing: "Before tonight ends.",
     sourceMessageId: "",
   }];
-  const candidate = structuredClone(previousState);
+  const candidate = trackerStateForLlm(previousState);
   candidate.scene.time = "8:15 PM";
   candidate.arc.objectives[0].status = "";
+  candidate.arc.objectives[0].action = "update";
   let calls = 0;
   const spindleApi = {
     connections: { list: async () => [{ id: "local", provider: "openai-compatible", is_default: true }] },
@@ -164,8 +172,10 @@ test("accepts a conservative objective fallback without a second model call", as
 });
 
 test("normalizes Teen Mode sexual interest locally without a repair call", async () => {
-  const candidate = cloneEmptyState();
+  const candidate = trackerStateForLlm(null);
   candidate.arc.response.sexualInterest = "Mild";
+  candidate.arc.response.latestChange = "Sexual interest changed.";
+  candidate.arc.response.action = "update";
   let calls = 0;
   const spindleApi = {
     connections: { list: async () => [{ id: "local", provider: "openai-compatible", is_default: true }] },
@@ -190,6 +200,7 @@ test("normalizes Teen Mode sexual interest locally without a repair call", async
 
 test("accepts a forced Anthropic tracker tool call", async () => {
   const state = cloneEmptyState();
+  const output = trackerStateForLlm(state);
   const listedUsers = [];
   const fetchedConnections = [];
   const generatedUsers = [];
@@ -214,7 +225,7 @@ test("accepts a forced Anthropic tracker tool call", async () => {
         assert.match(input.messages[0].content, /manVisible separates/);
         return {
           content: "",
-          tool_calls: [{ name: "record_date_simulator_state", args: state }],
+          tool_calls: [{ name: "record_date_simulator_state", args: output }],
         };
       },
     },

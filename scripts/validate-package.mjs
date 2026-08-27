@@ -45,6 +45,9 @@ check(backend.includes("bodyTypeAndProportions"), "Backend bundle contains stabl
 check(backend.includes("fictional narrative clock, never wall-clock time"), "Backend distinguishes narrative time from wall-clock delay");
 check(backend.includes("scene.lifecycle"), "Backend bundle contains explicit scene lifecycle state");
 check(backend.includes("arc.lifecycle"), "Backend bundle contains explicit arc lifecycle state");
+check(backend.includes("materializeTrackerOutputDetailed"), "Backend materializes provider actions into canonical provenance");
+check(backend.includes("Never return sourceMessageId"), "Tracker prompt keeps source identifiers out of provider output");
+check(backend.includes('enum: TRACKER_ACTIONS'), "Provider schema constrains provenance actions");
 check(backend.includes("dressAndLayers"), "Backend bundle contains structured visible-man state");
 check(backend.includes("proximityAndContact"), "Backend bundle contains structured spatial state");
 check(frontend.includes("Body type & proportions"), "Frontend exposes stable woman appearance state");
