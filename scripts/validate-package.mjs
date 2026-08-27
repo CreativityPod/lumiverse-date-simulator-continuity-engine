@@ -70,6 +70,10 @@ check(frontend.includes("CONTINUITY_ICON_SVG"), "Frontend reuses one Continuity 
 check(frontend.includes("Show Widget"), "Frontend exposes the floating-widget preference");
 check(frontend.includes("continuity_set_widget_visibility"), "Frontend persists widget visibility immediately");
 check(backend.includes("showStatusWidget"), "Backend persists the floating-widget preference");
+check(backend.includes('spindle.on("CHAT_DELETED"'), "Backend cleans sidecars after confirmed chat deletion");
+check(backend.includes("scanUnusedStores"), "Backend contains conservative unused-store scanning");
+check(frontend.includes("Clean Unused Tracking Files"), "Frontend exposes confirmed tracking-file cleanup");
+check(frontend.includes("continuity_cleanup_unused"), "Frontend confirms cleanup through the backend");
 
 if (failures.length) {
   console.error(`Package validation failed:\n- ${failures.join("\n- ")}`);
