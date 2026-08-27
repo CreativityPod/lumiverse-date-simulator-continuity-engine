@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { cloneEmptyState, trackerStateForLlm } from "../src/schemas.js";
+import { createStore } from "../src/state.js";
 
 const CASE = `CASE: DS-V14-BACKEND; Date Simulator v1.4; Adult Mode; cafe.
 MAN: Adult; appearance Unknown.
@@ -41,6 +42,22 @@ test("background reconciliation saves state and the interceptor injects one bran
     storage: {
       getJson: async (name, options) => structuredClone(files.get(name) ?? options?.fallback),
       setJson: async (name, value) => files.set(name, structuredClone(value)),
+      read: async (name) => {
+        if (!files.has(name)) throw new Error("File not found");
+        return JSON.stringify(files.get(name));
+      },
+      list: async (prefix = "") => [...files.keys()]
+        .filter((name) => name.startsWith(prefix))
+        .map((name) => name.slice(prefix.length)),
+      exists: async (name) => files.has(name),
+      delete: async (name) => { files.delete(name); },
+      stat: async (name) => ({
+        exists: files.has(name),
+        isFile: files.has(name),
+        isDirectory: false,
+        sizeBytes: files.has(name) ? JSON.stringify(files.get(name)).length : 0,
+        modifiedAt: new Date(0).toISOString(),
+      }),
     },
     variables: {
       chat: {
@@ -308,6 +325,22 @@ test("saves the private profile before tracker completion and blocks the next pr
     storage: {
       getJson: async (name, options) => structuredClone(files.get(name) ?? options?.fallback),
       setJson: async (name, value) => files.set(name, structuredClone(value)),
+      read: async (name) => {
+        if (!files.has(name)) throw new Error("File not found");
+        return JSON.stringify(files.get(name));
+      },
+      list: async (prefix = "") => [...files.keys()]
+        .filter((name) => name.startsWith(prefix))
+        .map((name) => name.slice(prefix.length)),
+      exists: async (name) => files.has(name),
+      delete: async (name) => { files.delete(name); },
+      stat: async (name) => ({
+        exists: files.has(name),
+        isFile: files.has(name),
+        isDirectory: false,
+        sizeBytes: files.has(name) ? JSON.stringify(files.get(name)).length : 0,
+        modifiedAt: new Date(0).toISOString(),
+      }),
     },
     variables: {
       chat: {
@@ -364,6 +397,192 @@ test("saves the private profile before tracker completion and blocks the next pr
   assert.equal(files.get("chats/chat-barrier.json").revision, 1);
   assert.ok(files.get("chats/chat-barrier.json").lastRevisionAt);
   assert.match(result.messages.map((message) => String(message.content)).join("\n"), /CURRENT SCENE/);
+
+  delete globalThis.spindle;
+});
+
+test("does not create inert sidecars and safely cleans deleted, orphaned, and never-used stores", async () => {
+  const events = new Map();
+  const files = new Map();
+  const frontendMessages = [];
+  let frontendHandler;
+
+  const trackedStore = (chatId) => {
+    const store = createStore(chatId);
+    store.caseText = CASE;
+    store.current = cloneEmptyState();
+    store.revision = 1;
+    store.lastRevisionAt = "2026-08-27T12:00:00.000Z";
+    return store;
+  };
+
+  files.set("config.json", { enabled: true });
+  files.set("chats/live-tracked.json", trackedStore("live-tracked"));
+  files.set("chats/live-inert.json", createStore("live-inert"));
+  files.set("chats/orphan-tracked.json", trackedStore("orphan-tracked"));
+  files.set("chats/auto-deleted.json", trackedStore("auto-deleted"));
+  files.set("chats/mismatched.json", createStore("different-chat"));
+  files.set("chats/malformed.json", "not a store envelope");
+  files.set("chats/nested/ignored.json", createStore("nested-ignored"));
+
+  const storage = {
+    getJson: async (name, options) => structuredClone(files.get(name) ?? options?.fallback),
+    setJson: async (name, value) => files.set(name, structuredClone(value)),
+    read: async (name) => {
+      if (!files.has(name)) throw new Error("File not found");
+      return JSON.stringify(files.get(name));
+    },
+    list: async (prefix = "") => [...files.keys()]
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => name.slice(prefix.length)),
+    exists: async (name) => files.has(name),
+    delete: async (name) => { files.delete(name); },
+    stat: async (name) => ({
+      exists: files.has(name),
+      isFile: files.has(name),
+      isDirectory: false,
+      sizeBytes: files.has(name) ? JSON.stringify(files.get(name)).length : 0,
+      modifiedAt: new Date(0).toISOString(),
+    }),
+  };
+
+  globalThis.spindle = {
+    permissions: {
+      has: (permission) => ["generation", "interceptor", "chat_mutation"].includes(permission),
+      onChanged: () => () => undefined,
+    },
+    storage,
+    variables: {
+      chat: {
+        get: async () => "",
+        set: async () => undefined,
+      },
+    },
+    chat: {
+      getMessages: async (chatId) => {
+        if (chatId === "orphan-tracked") throw new Error("Chat not found");
+        return [{ id: "ordinary", role: "user", content: "An ordinary non-Date-Simulator chat." }];
+      },
+    },
+    connections: {
+      list: async () => [],
+      get: async () => ({ id: "local", provider: "openai", is_default: true }),
+    },
+    generate: { quiet: async () => ({ content: JSON.stringify(trackerStateForLlm(null)) }) },
+    registerInterceptor: () => undefined,
+    on: (name, handler) => { events.set(name, handler); return () => events.delete(name); },
+    onFrontendMessage: (handler) => { frontendHandler = handler; return () => undefined; },
+    sendToFrontend: (payload) => frontendMessages.push(payload),
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+  };
+
+  const { backendTest } = await import(`../src/backend.js?cleanup-test=${Date.now()}`);
+  assert.equal(backendTest.isInertStore(createStore("inert")), true);
+  assert.equal(backendTest.isInertStore(trackedStore("tracked")), false);
+  assert.equal(typeof events.get("CHAT_DELETED"), "function");
+
+  await events.get("MESSAGE_SENT")({ chatId: "inactive-new", message: {} }, "user-1");
+  assert.equal(files.has("chats/inactive-new.json"), false);
+
+  await events.get("CHAT_DELETED")({ id: "auto-deleted" }, "user-1");
+  assert.equal(files.has("chats/auto-deleted.json"), false);
+
+  await frontendHandler({ type: "continuity_scan_cleanup" }, "user-1");
+  const scan = frontendMessages.findLast((payload) => payload.type === "continuity_cleanup_scan_result");
+  assert.equal(scan.count, 2);
+  assert.equal(scan.inert, 1);
+  assert.equal(scan.orphan, 1);
+  assert.ok(scan.token);
+  assert.match(scan.message, /Click Delete to confirm/);
+  assert.equal(files.has("chats/live-inert.json"), true);
+  assert.equal(files.has("chats/orphan-tracked.json"), true);
+
+  await frontendHandler({ type: "continuity_cleanup_unused", token: scan.token }, "user-1");
+  const cleanup = frontendMessages.findLast(
+    (payload) => payload.type === "continuity_action_result" && payload.action === "cleanup",
+  );
+  assert.equal(cleanup.ok, true);
+  assert.match(cleanup.message, /Deleted 2 unused tracking files/);
+  assert.equal(files.has("chats/live-inert.json"), false);
+  assert.equal(files.has("chats/orphan-tracked.json"), false);
+  assert.equal(files.has("chats/live-tracked.json"), true);
+  assert.equal(files.has("chats/mismatched.json"), true);
+  assert.equal(files.has("chats/malformed.json"), true);
+  assert.equal(files.has("chats/nested/ignored.json"), true);
+  assert.equal(files.has("config.json"), true);
+
+  delete globalThis.spindle;
+});
+
+test("chat deletion waits for an in-flight tracker and removes its final sidecar", async () => {
+  const events = new Map();
+  const files = new Map();
+  const variables = new Map();
+  const messages = [
+    { id: "u0", role: "user", content: "Surprise me" },
+    {
+      id: "a0",
+      role: "assistant",
+      swipe_id: 0,
+      content: `She looks up.\n<!--DATE_SIM_CASE\n${CASE}\nEND_DATE_SIM_CASE-->`,
+    },
+  ];
+  let releaseGeneration;
+  let markGenerationStarted;
+  const generationGate = new Promise((resolve) => { releaseGeneration = resolve; });
+  const generationStarted = new Promise((resolve) => { markGenerationStarted = resolve; });
+
+  globalThis.spindle = {
+    permissions: {
+      has: (permission) => ["generation", "interceptor", "chat_mutation"].includes(permission),
+      onChanged: () => () => undefined,
+    },
+    storage: {
+      getJson: async (name, options) => structuredClone(files.get(name) ?? options?.fallback),
+      setJson: async (name, value) => files.set(name, structuredClone(value)),
+      read: async (name) => JSON.stringify(files.get(name)),
+      list: async () => [],
+      exists: async (name) => files.has(name),
+      delete: async (name) => { files.delete(name); },
+      stat: async () => ({ exists: false, sizeBytes: 0 }),
+    },
+    variables: {
+      chat: {
+        get: async (chatId, key) => variables.get(`${chatId}:${key}`) ?? "",
+        set: async (chatId, key, value) => variables.set(`${chatId}:${key}`, value),
+      },
+    },
+    chat: { getMessages: async () => structuredClone(messages) },
+    connections: {
+      list: async () => [],
+      get: async () => ({ id: "local", provider: "openai", is_default: true }),
+    },
+    generate: {
+      quiet: async () => {
+        markGenerationStarted();
+        await generationGate;
+        return { content: JSON.stringify(trackerStateForLlm(null)) };
+      },
+    },
+    registerInterceptor: () => undefined,
+    on: (name, handler) => { events.set(name, handler); return () => events.delete(name); },
+    onFrontendMessage: () => () => undefined,
+    sendToFrontend: () => undefined,
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+  };
+
+  await import(`../src/backend.js?delete-race-test=${Date.now()}`);
+  const tracking = events.get("MESSAGE_SENT")({ chatId: "chat-delete-race" }, "user-1");
+  await generationStarted;
+  assert.equal(files.has("chats/chat-delete-race.json"), true);
+
+  const deletion = events.get("CHAT_DELETED")({ id: "chat-delete-race" }, "user-1");
+  releaseGeneration();
+  await Promise.all([tracking, deletion]);
+  assert.equal(files.has("chats/chat-delete-race.json"), false);
+
+  await events.get("MESSAGE_SENT")({ chatId: "chat-delete-race" }, "user-1");
+  assert.equal(files.has("chats/chat-delete-race.json"), false);
 
   delete globalThis.spindle;
 });

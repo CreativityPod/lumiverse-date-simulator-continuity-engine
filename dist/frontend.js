@@ -351,6 +351,7 @@ export function setup(ctx) {
   let statusWidgetButton = null;
   let statusWidgetInteractionCleanup = null;
   let pendingStatusWidgetPreference = null;
+  let cleanupConfirmation = null;
   let statusWidgetProcessingTimer = null;
   let statusWidgetCompleteTimer = null;
   const statusWidgetRevisionByChat = new Map();
@@ -381,6 +382,8 @@ export function setup(ctx) {
     .dsc-button:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 2px; }
     .dsc-button-primary { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); }
     .dsc-button-primary:hover:not(:disabled) { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); filter: brightness(1.06); }
+    .dsc-button-danger { border-color: var(--lumiverse-warning, #c89b62); color: var(--lumiverse-warning, #c89b62); }
+    .dsc-button-danger:hover:not(:disabled) { border-color: var(--lumiverse-warning, #c89b62); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-warning, #c89b62); }
     .dsc-button:disabled { opacity: .5; cursor: wait; }
     .dsc-fallback-control { box-sizing: border-box; width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); font: inherit; font-size: .78rem; }
     .dsc-fallback-control:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 1px; }
@@ -812,13 +815,21 @@ export function setup(ctx) {
   function setActionPending(message) {
     reprocessButton.disabled = true;
     migrateButton.disabled = true;
+    cleanupButton.disabled = true;
     setActionFeedback(message, "amber");
   }
 
   function finishAction(message, ok) {
     reprocessButton.disabled = false;
     migrateButton.disabled = false;
+    cleanupButton.disabled = false;
     setActionFeedback(message, ok ? "green" : "amber");
+  }
+
+  function resetCleanupConfirmation() {
+    cleanupConfirmation = null;
+    cleanupButton.textContent = "Clean Unused Tracking Files";
+    cleanupButton.classList.remove("dsc-button-danger");
   }
 
   function requestStatus() {
@@ -1359,7 +1370,18 @@ export function setup(ctx) {
       includePrivate: controls.showPrivate.get() === true,
     });
   });
-  actions.append(saveButton, refreshButton, reprocessButton, migrateButton);
+  const cleanupButton = createButton("Clean Unused Tracking Files", () => {
+    if (cleanupConfirmation?.token) {
+      const token = cleanupConfirmation.token;
+      resetCleanupConfirmation();
+      setActionPending("Rechecking and deleting confirmed unused tracking files…");
+      ctx.sendToBackend({ type: "continuity_cleanup_unused", token });
+      return;
+    }
+    setActionPending("Scanning extension-owned tracking files…");
+    ctx.sendToBackend({ type: "continuity_scan_cleanup" });
+  });
+  actions.append(saveButton, refreshButton, reprocessButton, migrateButton, cleanupButton);
 
   if (typeof MutationObserver === "function" && document.body) {
     const observer = new MutationObserver((records) => {
@@ -1405,7 +1427,18 @@ export function setup(ctx) {
     if (payload?.type === "continuity_action_started") {
       setActionPending(payload.message || "Continuity action started…");
     }
+    if (payload?.type === "continuity_cleanup_scan_result") {
+      finishAction(payload.message || "Cleanup scan finished.", payload.ok === true);
+      if (payload.token && Number(payload.count) > 0) {
+        cleanupConfirmation = { token: payload.token };
+        cleanupButton.textContent = `Delete ${payload.count} Unused File${Number(payload.count) === 1 ? "" : "s"}`;
+        cleanupButton.classList.add("dsc-button-danger");
+      } else {
+        resetCleanupConfirmation();
+      }
+    }
     if (payload?.type === "continuity_action_result") {
+      if (payload.action === "cleanup") resetCleanupConfirmation();
       finishAction(payload.message || "Continuity action finished.", payload.ok === true);
       if (payload.status) renderStatus(payload.status);
     }

@@ -52,12 +52,12 @@ For LM Studio, the extension's **OpenAI-compatible JSON Schema** mode supplies `
 
 The Continuity drawer always shows a privacy-safe observable snapshot: current scene and arc lifecycle, narrative date and time, the woman's stable face/eyes/skin/body traits and visible grooming/dress/physical state, the man's structured visible state, structured spatial continuity, established relationship status, latest relationship change, and public NPC facts. Lifecycle reasons, mental state, boundaries, objectives, NPC intentions, and source IDs remain private and appear only when **Show private tracker state** is explicitly enabled.
 
-The drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, and explicit v1.3.1 migration. It uses Lumiverse's host-mounted selects, switches, numeric inputs, badges, and checkboxes when available. Persistent theme-matched details sections keep those mounted controls alive while collapsed. Older hosts receive one consistent theme-token HTML fallback.
+The drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, explicit v1.3.1 migration, and confirmed cleanup of unused extension-owned tracking files. The cleanup action first reports orphaned and never-used sidecars, then requires a second click and a fresh safety check before deletion. It uses Lumiverse's host-mounted selects, switches, numeric inputs, badges, and checkboxes when available. Persistent theme-matched details sections keep those mounted controls alive while collapsed. Older hosts receive one consistent theme-token HTML fallback.
 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.6 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.7 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -82,6 +82,7 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 - Version 1.3.4 keeps full schema-v4 JSON for canonical state and private inspection while injecting a compact private prompt projection that removes provenance, empty collections, and known unknown/default values without dropping established continuity.
 - Version 1.3.5 recognizes bare `1` as Surprise Me only after a branch-local marked startup menu, strips that routing marker from provider-bound assistant history, and structurally suppresses the card's marked saved-case fallback so the authoritative engine block contains the only stable-case copy.
 - Version 1.3.6 removes source-message identifiers from provider prompts and structured output, retains the existing schema-v4 scene and arc paths, uses `preserve`/`update` actions at all six provenance-bearing locations, and assigns canonical source identifiers deterministically in backend code.
+- Version 1.3.7 deletes chat sidecars after Lumiverse confirms chat deletion, prevents unrelated or inactive chats from creating new inert sidecars, and adds a two-step drawer cleanup action that safely removes orphaned and never-used tracking files while retaining malformed, changing, and historical stores.
 
 ## Development
 
