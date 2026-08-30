@@ -12,6 +12,7 @@ import {
   listEligibleTurns,
   normalizeStore,
   prefixFingerprint,
+  remapTrackerStateSourceIds,
   stripManagedText,
   stripStartupMenuMarkers,
   validateCaseCapsuleDetailed,
@@ -201,6 +202,51 @@ test("normalizes schema-v1 stores and checkpoints to tracker schema v4", () => {
   assert.equal(store.current.scene.location, "Legacy cafe");
   assert.equal(store.checkpoints["a1::0"].state.arc.response.rapportAndTrust, "Unknown");
   assert.equal(store.checkpoints["a1::0"].state.scene.womanStable.face, "Unknown");
+});
+
+test("remaps every canonical provenance id for a copied branch and rejects partial maps", () => {
+  const state = cloneEmptyState();
+  state.scene.lifecycle.reason = "The cafe closed.";
+  state.scene.lifecycle.sourceMessageId = "source-a1";
+  state.arc.lifecycle.reason = "They agreed to meet again.";
+  state.arc.lifecycle.sourceMessageId = "source-a2";
+  state.arc.relationship.latestChange = "They exchanged numbers.";
+  state.arc.relationship.sourceMessageId = "source-a2";
+  state.arc.response.latestChange = "Interest became clearer.";
+  state.arc.response.sourceMessageId = "source-a2";
+  state.arc.npcs = [{
+    name: "Nia",
+    role: "Friend",
+    relationship: "Her friend",
+    currentStatus: "Leaving the cafe",
+    immediateObjective: "Catch the train",
+    sourceMessageId: "source-a1",
+  }];
+  state.arc.objectives = [{
+    owner: "Woman",
+    objective: "Meet again",
+    status: "Active",
+    timing: "Next weekend",
+    sourceMessageId: "source-a2",
+  }];
+
+  const remapped = remapTrackerStateSourceIds(state, {
+    "source-a1": "fork-a1",
+    "source-a2": "fork-a2",
+  });
+  assert.ok(remapped);
+  assert.equal(remapped.scene.lifecycle.sourceMessageId, "fork-a1");
+  assert.equal(remapped.arc.lifecycle.sourceMessageId, "fork-a2");
+  assert.equal(remapped.arc.relationship.sourceMessageId, "fork-a2");
+  assert.equal(remapped.arc.response.sourceMessageId, "fork-a2");
+  assert.equal(remapped.arc.npcs[0].sourceMessageId, "fork-a1");
+  assert.equal(remapped.arc.objectives[0].sourceMessageId, "fork-a2");
+  assert.equal(state.scene.lifecycle.sourceMessageId, "source-a1");
+  assert.equal(remapTrackerStateSourceIds(state, { "source-a1": "fork-a1" }), null);
+  assert.equal(remapTrackerStateSourceIds(state, {
+    "source-a1": "fork-duplicate",
+    "source-a2": "fork-duplicate",
+  }), null);
 });
 
 test("builds one deterministic prompt-only Surprise Me casting draw", () => {

@@ -13,6 +13,7 @@ import {
   listEligibleTurns,
   normalizeStore,
   prefixFingerprint,
+  remapTrackerStateSourceIds,
   selectCheckpoint,
   stripStartupMenuMarkers,
   transcriptForMigration,
@@ -737,6 +738,149 @@ function scheduleReconcile(chatId, options = {}, userId) {
   );
 }
 
+function normalizeForkEvent(payload) {
+  const sourceChatId = typeof payload?.sourceChatId === "string" ? payload.sourceChatId.trim() : "";
+  const forkedChatId = typeof payload?.forkedChatId === "string" ? payload.forkedChatId.trim() : "";
+  const forkedAtMessageId = typeof payload?.forkedAtMessageId === "string"
+    ? payload.forkedAtMessageId.trim()
+    : "";
+  const rawMap = payload?.messageIdMap;
+  if (!sourceChatId || !forkedChatId || sourceChatId === forkedChatId || !forkedAtMessageId) return null;
+  if (!rawMap || typeof rawMap !== "object" || Array.isArray(rawMap)) return null;
+
+  const messageIdMap = new Map();
+  const forkedIds = new Set();
+  for (const [sourceId, forkedIdValue] of Object.entries(rawMap)) {
+    const forkedId = typeof forkedIdValue === "string" ? forkedIdValue.trim() : "";
+    if (!sourceId || !forkedId || forkedIds.has(forkedId)) return null;
+    messageIdMap.set(sourceId, forkedId);
+    forkedIds.add(forkedId);
+  }
+  if (!messageIdMap.has(forkedAtMessageId)) return null;
+  return { sourceChatId, forkedChatId, forkedAtMessageId, messageIdMap };
+}
+
+/** Seed a newly-created Lumiverse fork from the source chat's validated prefix. */
+async function inheritForkCheckpoints(payload, userId) {
+  const fork = normalizeForkEvent(payload);
+  if (!fork || !spindle.permissions.has("chat_mutation")) return false;
+  const scopedUserId = userForChat(fork.forkedChatId, userId);
+  const forkPath = storePath(fork.forkedChatId);
+  if (await spindle.storage.exists(forkPath)) {
+    const existing = await loadStore(fork.forkedChatId);
+    if (!isInertStore(existing)) return false;
+  }
+
+  const forkMessages = await spindle.chat.getMessages(fork.forkedChatId);
+  const reverseMap = new Map([...fork.messageIdMap].map(([sourceId, forkedId]) => [forkedId, sourceId]));
+  if (
+    forkMessages.length !== fork.messageIdMap.size
+    || forkMessages.some((message) => !reverseMap.has(String(message?.id ?? "")))
+  ) {
+    spindle.log.warn(`Continuity fork inheritance skipped for ${fork.forkedChatId}: incomplete message id map.`);
+    return false;
+  }
+
+  // Reconstruct the exact source prefix from the copied branch. This avoids a
+  // race with later edits or messages in the source chat while still allowing
+  // its stored fingerprints to prove that every inherited checkpoint matches.
+  const sourcePrefix = forkMessages.map((message) => ({
+    ...message,
+    id: reverseMap.get(String(message.id)),
+  }));
+  const sourceContext = deriveTranscriptContext(sourcePrefix);
+  const forkContext = deriveTranscriptContext(forkMessages);
+  if (
+    sourceContext.active !== forkContext.active
+    || String(sourceContext.caseText ?? "") !== String(forkContext.caseText ?? "")
+  ) {
+    spindle.log.warn(`Continuity fork inheritance skipped for ${fork.forkedChatId}: branch context mismatch.`);
+    return false;
+  }
+  if (!forkContext.active) return true;
+
+  const sourceStore = await loadStore(fork.sourceChatId);
+  const sourceTurns = listEligibleTurns(sourcePrefix, sourceContext);
+  const forkTurns = listEligibleTurns(forkMessages, forkContext);
+  if (sourceTurns.length !== forkTurns.length) {
+    spindle.log.warn(`Continuity fork inheritance skipped for ${fork.forkedChatId}: eligible turn mismatch.`);
+    return false;
+  }
+
+  const inherited = createStore(fork.forkedChatId);
+  inherited.epochKey = forkContext.epochKey;
+  inherited.caseText = forkContext.caseText ?? "";
+  let latestCheckpoint = null;
+  let inheritedMigrationBaseline = false;
+
+  for (let index = 0; index < sourceTurns.length; index += 1) {
+    const sourceTurn = sourceTurns[index];
+    const forkTurn = forkTurns[index];
+    if (fork.messageIdMap.get(String(sourceTurn.assistant.id)) !== String(forkTurn.assistant.id)) break;
+    const checkpoint = selectCheckpoint(sourceStore, sourceTurn);
+    if (!checkpoint) break;
+    const state = remapTrackerStateSourceIds(checkpoint.state, fork.messageIdMap);
+    if (!state) {
+      spindle.log.warn(`Continuity fork inheritance stopped for ${fork.forkedChatId}: incomplete provenance map.`);
+      break;
+    }
+    const forkCheckpoint = {
+      ...checkpoint,
+      fingerprint: forkTurn.fingerprint,
+      state,
+    };
+    inherited.checkpoints[forkTurn.key] = forkCheckpoint;
+    inherited.current = state;
+    inherited.revision += 1;
+    inherited.lastRevisionAt = checkpoint.createdAt || inherited.lastRevisionAt;
+    inherited.lastWarning = Array.isArray(checkpoint.warnings)
+      ? checkpoint.warnings.join("; ").slice(0, 500)
+      : "";
+    latestCheckpoint = forkCheckpoint;
+
+    if (
+      sourceStore.migrationAccepted
+      && sourceStore.migrationBaselineKey === sourceTurn.key
+      && sourceStore.migrationBaselineFingerprint === sourceTurn.fingerprint
+    ) {
+      inherited.migrationAccepted = true;
+      inherited.migrationRequired = false;
+      inherited.migrationBaselineKey = forkTurn.key;
+      inherited.migrationBaselineFingerprint = forkTurn.fingerprint;
+      inheritedMigrationBaseline = true;
+    }
+  }
+
+  if (!inheritedMigrationBaseline) {
+    inherited.migrationAccepted = false;
+    inherited.migrationRequired = forkContext.migrationRequired;
+  }
+  inherited.processing = false;
+  inherited.lastError = "";
+  if (!latestCheckpoint) inherited.lastRevisionAt = "";
+
+  await saveStore(fork.forkedChatId, inherited);
+  await mirrorStore(fork.forkedChatId, inherited, forkContext);
+  await publishStatus(fork.forkedChatId, {}, scopedUserId);
+  return true;
+}
+
+function scheduleForkInheritance(payload, userId) {
+  const fork = normalizeForkEvent(payload);
+  if (!fork) return Promise.resolve(false);
+  const sourcePending = queues.get(fork.sourceChatId) ?? Promise.resolve();
+  // Reserve the fork queue immediately. CHAT_SWITCHED can follow the fork
+  // event very quickly, and its normal reconciliation must run after seeding.
+  return scheduleChatTask(
+    fork.forkedChatId,
+    async () => {
+      await sourcePending.catch(() => undefined);
+      return inheritForkCheckpoints(payload, userId);
+    },
+    "Continuity fork inheritance",
+  );
+}
+
 async function removeDeletedChatStore(chatId) {
   if (!chatId) return;
   deletedChats.add(chatId);
@@ -872,6 +1016,8 @@ for (const eventName of [
     return scheduleReconcile(chatId, {}, userId);
   });
 }
+
+spindle.on("CHAT_FORKED", (payload, userId) => scheduleForkInheritance(payload, userId));
 
 spindle.on("CHAT_DELETED", (payload) => {
   const chatId = typeof payload?.id === "string" ? payload.id : "";
@@ -1110,4 +1256,6 @@ export const backendTest = Object.freeze({
   isInertStore,
   adoptActiveChat,
   userForChat,
+  normalizeForkEvent,
+  inheritForkCheckpoints,
 });

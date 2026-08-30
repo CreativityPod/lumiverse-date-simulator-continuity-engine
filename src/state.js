@@ -328,6 +328,47 @@ export function prefixFingerprint(messages, inclusiveIndex) {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+/**
+ * Copy a validated tracker state onto a fork whose copied messages received
+ * new ids. Every nonempty provenance id must be mapped; a partial remap would
+ * leave the fork pointing back into its source chat and is therefore rejected.
+ */
+export function remapTrackerStateSourceIds(state, messageIdMap) {
+  if (!state || typeof state !== "object") return null;
+  const entries = messageIdMap instanceof Map
+    ? [...messageIdMap.entries()]
+    : Object.entries(messageIdMap && typeof messageIdMap === "object" ? messageIdMap : {});
+  const ids = new Map();
+  const forkedIds = new Set();
+  for (const [sourceIdValue, forkedIdValue] of entries) {
+    const sourceId = typeof sourceIdValue === "string" ? sourceIdValue.trim() : "";
+    const forkedId = typeof forkedIdValue === "string" ? forkedIdValue.trim() : "";
+    if (!sourceId || !forkedId || ids.has(sourceId) || forkedIds.has(forkedId)) return null;
+    ids.set(sourceId, forkedId);
+    forkedIds.add(forkedId);
+  }
+  let complete = true;
+
+  const visit = (value) => {
+    if (Array.isArray(value)) return value.map(visit);
+    if (!value || typeof value !== "object") return value;
+    const result = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "sourceMessageId" && typeof child === "string" && child) {
+        const mapped = ids.get(child);
+        if (!mapped) complete = false;
+        result[key] = mapped ?? child;
+      } else {
+        result[key] = visit(child);
+      }
+    }
+    return result;
+  };
+
+  const remapped = visit(state);
+  return complete ? remapped : null;
+}
+
 export function deriveTranscriptContext(messages) {
   let caseText = null;
   let caseMessageId = null;

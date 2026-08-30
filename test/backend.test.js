@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { cloneEmptyState, trackerStateForLlm } from "../src/schemas.js";
-import { createStore } from "../src/state.js";
+import {
+  createStore,
+  deriveTranscriptContext,
+  listEligibleTurns,
+} from "../src/state.js";
 
 const CASE = `CASE: DS-V14-BACKEND; Date Simulator v1.4; Adult Mode; cafe.
 MAN: Adult; appearance Unknown.
@@ -13,6 +17,169 @@ RELATIONSHIP: Single and open to dating.
 CURRENT CONTEXT: At a cafe; sober.
 BOUNDARIES: No assumed touch.
 INITIAL STATE: Neutral curiosity.`;
+
+test("inherits the exact fork-point checkpoints with remapped provenance and no replay generations", async () => {
+  const events = new Map();
+  const files = new Map();
+  const variables = new Map();
+  const generationInputs = [];
+  const sourceMessages = [
+    { id: "source-u0", role: "user", content: "Surprise me", swipe_id: 0 },
+    {
+      id: "source-a0",
+      role: "assistant",
+      swipe_id: 0,
+      content: `She looks up from her coffee.\n<!--DATE_SIM_CASE\n${CASE}\nEND_DATE_SIM_CASE-->`,
+    },
+    { id: "source-u1", role: "user", content: "Ask about her book", swipe_id: 0 },
+    { id: "source-a1", role: "assistant", content: "She explains the title.", swipe_id: 0 },
+  ];
+  const forkMessages = [
+    { id: "fork-u0", role: "user", content: sourceMessages[0].content, swipe_id: 0 },
+    { id: "fork-a0", role: "assistant", content: sourceMessages[1].content, swipe_id: 0 },
+  ];
+  const fullForkMessages = sourceMessages.map((message) => ({
+    ...message,
+    id: message.id.replace("source-", "full-fork-"),
+  }));
+  const sourceContext = deriveTranscriptContext(sourceMessages);
+  const sourceTurns = listEligibleTurns(sourceMessages, sourceContext);
+  assert.equal(sourceTurns.length, 2);
+
+  const forkPointState = cloneEmptyState();
+  forkPointState.scene.location = "Cafe table";
+  forkPointState.scene.lifecycle.reason = "The date began at the cafe.";
+  forkPointState.scene.lifecycle.sourceMessageId = "source-a0";
+  const laterSourceState = structuredClone(forkPointState);
+  laterSourceState.scene.location = "Bookshop";
+  laterSourceState.scene.lifecycle.reason = "They moved to the bookshop.";
+  laterSourceState.scene.lifecycle.sourceMessageId = "source-a1";
+
+  const sourceStore = createStore("source-chat");
+  sourceStore.epochKey = sourceContext.epochKey;
+  sourceStore.caseText = sourceContext.caseText;
+  sourceStore.current = laterSourceState;
+  sourceStore.revision = 2;
+  sourceStore.lastRevisionAt = "2026-08-30T12:00:00.000Z";
+  sourceStore.checkpoints[sourceTurns[0].key] = {
+    fingerprint: sourceTurns[0].fingerprint,
+    state: forkPointState,
+    warnings: [],
+    createdAt: "2026-08-30T11:00:00.000Z",
+  };
+  sourceStore.checkpoints[sourceTurns[1].key] = {
+    fingerprint: sourceTurns[1].fingerprint,
+    state: laterSourceState,
+    warnings: [],
+    createdAt: "2026-08-30T12:00:00.000Z",
+  };
+  files.set("chats/source-chat.json", structuredClone(sourceStore));
+
+  const messagesByChat = new Map([
+    ["source-chat", sourceMessages],
+    ["fork-chat", forkMessages],
+    ["full-fork-chat", fullForkMessages],
+  ]);
+  globalThis.spindle = {
+    permissions: {
+      has: (permission) => ["generation", "interceptor", "chat_mutation"].includes(permission),
+      onChanged: () => () => undefined,
+    },
+    storage: {
+      getJson: async (name, options) => structuredClone(files.get(name) ?? options?.fallback),
+      setJson: async (name, value) => files.set(name, structuredClone(value)),
+      exists: async (name) => files.has(name),
+      read: async (name) => JSON.stringify(files.get(name)),
+      list: async () => [],
+      delete: async (name) => { files.delete(name); },
+      stat: async () => ({ exists: true, isFile: true, isDirectory: false, sizeBytes: 1 }),
+    },
+    variables: {
+      chat: {
+        get: async (chatId, key) => variables.get(`${chatId}:${key}`) ?? "",
+        set: async (chatId, key, value) => variables.set(`${chatId}:${key}`, value),
+      },
+    },
+    chat: {
+      getMessages: async (chatId) => structuredClone(messagesByChat.get(chatId) ?? []),
+    },
+    connections: {
+      list: async () => [{ id: "tracker", provider: "openai", is_default: true }],
+      get: async () => ({ id: "tracker", provider: "openai", is_default: true }),
+    },
+    generate: {
+      quiet: async (input) => {
+        generationInputs.push(input);
+        return { content: JSON.stringify(trackerStateForLlm(null)) };
+      },
+    },
+    registerInterceptor: () => undefined,
+    on: (name, handler) => {
+      events.set(name, handler);
+      return () => events.delete(name);
+    },
+    onFrontendMessage: () => () => undefined,
+    sendToFrontend: () => undefined,
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+  };
+
+  await import(`../src/backend.js?fork-inheritance-test=${Date.now()}`);
+  assert.equal(typeof events.get("CHAT_FORKED"), "function");
+
+  const inheritance = events.get("CHAT_FORKED")({
+    sourceChatId: "source-chat",
+    forkedChatId: "fork-chat",
+    forkedAtMessageId: "source-a0",
+    forkedAtMessageIndex: 1,
+    messageIdMap: {
+      "source-u0": "fork-u0",
+      "source-a0": "fork-a0",
+    },
+  }, "user-1");
+  // Lumiverse switches to the fork immediately after creating it. This must
+  // queue behind inheritance instead of starting a historical replay.
+  events.get("CHAT_SWITCHED")({ chatId: "fork-chat" }, "user-1");
+  await inheritance;
+  await events.get("MESSAGE_EDITED")({ chatId: "fork-chat" }, "user-1");
+
+  assert.equal(generationInputs.length, 0);
+  const inherited = files.get("chats/fork-chat.json");
+  assert.ok(inherited);
+  assert.deepEqual(Object.keys(inherited.checkpoints), ["fork-a0::0"]);
+  assert.equal(inherited.current.scene.location, "Cafe table");
+  assert.equal(inherited.current.scene.lifecycle.sourceMessageId, "fork-a0");
+  assert.equal(inherited.current.scene.location === laterSourceState.scene.location, false);
+  assert.equal(inherited.revision, 1);
+  assert.equal(inherited.lastRevisionAt, "2026-08-30T11:00:00.000Z");
+
+  const forkContext = deriveTranscriptContext(forkMessages);
+  const forkTurn = listEligibleTurns(forkMessages, forkContext)[0];
+  assert.equal(inherited.epochKey, forkContext.epochKey);
+  assert.equal(inherited.checkpoints["fork-a0::0"].fingerprint, forkTurn.fingerprint);
+
+  const fullInheritance = events.get("CHAT_FORKED")({
+    sourceChatId: "source-chat",
+    forkedChatId: "full-fork-chat",
+    forkedAtMessageId: "source-a1",
+    forkedAtMessageIndex: 3,
+    messageIdMap: {
+      "source-u0": "full-fork-u0",
+      "source-a0": "full-fork-a0",
+      "source-u1": "full-fork-u1",
+      "source-a1": "full-fork-a1",
+    },
+  }, "user-1");
+  events.get("CHAT_SWITCHED")({ chatId: "full-fork-chat" }, "user-1");
+  await fullInheritance;
+  await events.get("MESSAGE_EDITED")({ chatId: "full-fork-chat" }, "user-1");
+
+  assert.equal(generationInputs.length, 0);
+  const fullyInherited = files.get("chats/full-fork-chat.json");
+  assert.deepEqual(Object.keys(fullyInherited.checkpoints), ["full-fork-a0::0", "full-fork-a1::0"]);
+  assert.equal(fullyInherited.current.scene.location, "Bookshop");
+  assert.equal(fullyInherited.current.scene.lifecycle.sourceMessageId, "full-fork-a1");
+  assert.equal(fullyInherited.revision, 2);
+});
 
 test("background reconciliation saves state and the interceptor injects one branch state", async () => {
   const events = new Map();
