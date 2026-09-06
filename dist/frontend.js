@@ -242,11 +242,14 @@ export function privateStatePresentation(visible, status, cached = null) {
   };
 }
 
-function createButton(text, action, primary = false) {
+export function createButton(text, action, primary = false) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `dsc-button${primary ? " dsc-button-primary" : ""}`;
   button.textContent = text;
+  // Host themes use very faint separator colors. Controls need a visible
+  // boundary even when a drawer stylesheet is delayed or a theme resets buttons.
+  button.style.cssText = `appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:9px 14px;border:1px solid var(--lumiverse-text-muted,#b6afc8);border-radius:8px;background:${primary ? "var(--lumiverse-primary,#68529e)" : "rgba(127,127,127,.16)"};color:${primary ? "#fff" : "var(--lumiverse-text,#eeeaf5)"};font:inherit;font-size:13px;font-weight:600;line-height:1.3;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.1);`;
   button.addEventListener("click", action);
   return button;
 }
@@ -309,6 +312,7 @@ export function cardsInside(root) {
   function visit(scope) {
     if (!scope || visited.has(scope) || typeof scope.querySelectorAll !== "function") return;
     visited.add(scope);
+    if (scope.shadowRoot) visit(scope.shadowRoot);
 
     if (isElementLike(scope)) {
       if (scope.matches(PROFILE_CARD_SELECTOR)) cards.push(scope);
@@ -345,6 +349,50 @@ export async function pickSetupFile(ctx, target, getActiveChatId) {
   return new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
 }
 
+export const SETUP_FILENAME = "date-simulator-initial-setup.json";
+
+// Call before any await/backend round trip so browsers retain user activation.
+export function openSetupSavePicker(browserWindow) {
+  if (browserWindow.isSecureContext === false || typeof browserWindow.showSaveFilePicker !== "function") return null;
+  try {
+    return Promise.resolve(browserWindow.showSaveFilePicker({
+      suggestedName: SETUP_FILENAME,
+      types: [{ description: "Date Simulator setup", accept: { "application/json": [".json"] } }],
+    })).then((handle) => ({ handle }), (error) => ({ error }));
+  } catch (error) { return Promise.resolve({ error }); }
+}
+
+export async function finishSetupSave(picker, fileText, isCurrent = () => true) {
+  const result = await picker;
+  if (!isCurrent()) return "stale";
+  if (!result) return "download";
+  if (result.error?.name === "AbortError") return "canceled";
+  if (result.error) return "download";
+  const writable = await result.handle.createWritable();
+  try {
+    if (!isCurrent()) { await writable.abort?.(); return "stale"; }
+    await writable.write(fileText);
+    if (!isCurrent()) { await writable.abort?.(); return "stale"; }
+    await writable.close();
+    return "saved";
+  } catch (error) {
+    try { await writable.abort?.(); } catch { /* retain the original write error */ }
+    throw error;
+  }
+}
+
+// A separate real click is required on hosts without the native save API.
+// A data URL avoids relying on a Blob URL created in an asynchronous callback.
+export function downloadSetupFile(fileText, ownerDocument) {
+  const anchor = ownerDocument.createElement("a");
+  anchor.href = `data:application/json;charset=utf-8,${encodeURIComponent(fileText)}`;
+  anchor.download = SETUP_FILENAME;
+  anchor.style.display = "none";
+  anchor.addEventListener("click", (event) => event.stopPropagation());
+  ownerDocument.body.appendChild(anchor);
+  try { anchor.click(); } finally { anchor.remove(); }
+}
+
 export function setup(ctx) {
   ctx.deferReady();
   const cleanups = [];
@@ -357,6 +405,7 @@ export function setup(ctx) {
   let showPrivateState = false;
   let privateStateCache = null;
   let cardSyncQueued = false;
+  let disposed = false;
   let statusWidget = null;
   let statusWidgetButton = null;
   let statusWidgetInteractionCleanup = null;
@@ -370,10 +419,16 @@ export function setup(ctx) {
   let setupBusy = false;
   let setupRequest = null;
   let setupRequestSequence = 0;
-  let setupDownloadUrl = null;
+  let preparedSetup = null;
+  let pendingSavePicker = null;
+  let setupSaveGeneration = 0;
+  const profileStatusByMessage = new Map();
   let generationBusy = false;
 
   const removeStyle = ctx.dom.addStyle(`
+    .ds-import-setup { appearance: none !important; display: inline-flex !important; align-items: center; min-height: 40px; padding: 10px 16px !important; border: 2px solid #b29bd8 !important; border-radius: 9px !important; background: #392b50 !important; color: #fff !important; font-weight: 700 !important; line-height: 1.3; cursor: pointer !important; box-shadow: inset 0 1px 0 rgba(255,255,255,.16); }
+    .ds-import-setup:hover { background: #503d70 !important; }
+    .ds-import-setup:focus-visible { outline: 3px solid #c7b1ed; outline-offset: 3px; }
     .dsc-panel [hidden] { display: none !important; }
     .dsc-panel { color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 16px; }
     .dsc-status-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 2px 0 12px; border-bottom: 1px solid var(--lumiverse-border); }
@@ -523,8 +578,15 @@ export function setup(ctx) {
   setupFeedback.className = "dsc-hint";
   setupFeedback.setAttribute("aria-live", "polite");
   setupFeedback.textContent = "Save the private profile and original starting state as a JSON file. The file is readable outside the simulation.";
-  const setupDownload = document.createElement("a");
-  setupDownload.textContent = "Save setup file";
+  const setupDownload = createButton("Download JSON File", () => {
+    if (!preparedSetup || preparedSetup.chatId !== activeChatId) return;
+    try {
+      downloadSetupFile(preparedSetup.fileText, document);
+      setupFeedback.textContent = "Download requested. Check your browser’s Downloads. A Save As window depends on your browser settings on this connection.";
+    } catch (error) {
+      setupFeedback.textContent = `Download could not start: ${String(error?.message ?? error)}`;
+    }
+  }, true);
   setupDownload.hidden = true;
   setupSection.append(setupTitle, setupActions, setupFeedback, setupDownload);
   panel.append(statusRow, setupSection, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
@@ -1039,12 +1101,13 @@ export function setup(ctx) {
     return [...cards];
   }
 
-  function profileCardsForStatus(status) {
+  function profileCardsForStatus(status, exactOnly = false) {
     if (!status?.caseMessageId) return [];
     const bubble = ctx.dom.findMessageElement(status.caseMessageId);
     const exact = cardsInside(bubble);
     if (exact.length > 0) return exact;
 
+    if (exactOnly || status.chatId !== activeChatId) return [];
     const fallback = mountedProfileCards();
     return fallback.length > 0 ? [fallback.at(-1)] : [];
   }
@@ -1090,7 +1153,7 @@ export function setup(ctx) {
   }
 
   function armCardWatchdog(card) {
-    if (!isElementLike(card) || cardWatchdogs.has(card)) return;
+    if (!isElementLike(card) || cardWatchdogs.has(card) || ["saved", "saving", "fallback", "invalid"].includes(card.dataset.engineState)) return;
     if (!card.dataset.engineState) card.dataset.engineState = "checking";
     applyProfileCardChrome(card, { manual: false, level: "green" });
     const timer = setTimeout(() => {
@@ -1119,10 +1182,10 @@ export function setup(ctx) {
     watchdogTimers.add(timer);
   }
 
-  function updateProfileCards(status) {
+  function updateProfileCards(status, exactOnly = false) {
     if (!status?.caseMessageId) return;
     const presentation = profileCardPresentation(status);
-    for (const card of profileCardsForStatus(status)) {
+    for (const card of profileCardsForStatus(status, exactOnly)) {
       clearCardWatchdog(card);
       card.dataset.engineState = presentation.state;
       card.dataset.engineManual = presentation.manual ? "true" : "false";
@@ -1146,10 +1209,14 @@ export function setup(ctx) {
   }
 
   function scheduleProfileCardSync() {
-    if (cardSyncQueued) return;
+    if (disposed || cardSyncQueued) return;
     cardSyncQueued = true;
     queueMicrotask(() => {
       cardSyncQueued = false;
+      if (disposed) return;
+      refreshProfileObservers();
+      for (const card of mountedProfileCards()) armCardWatchdog(card);
+      for (const status of profileStatusByMessage.values()) updateProfileCards(status, true);
       if (latestStatus) updateProfileCards(latestStatus);
     });
   }
@@ -1326,6 +1393,13 @@ export function setup(ctx) {
   }
 
   function renderStatus(status) {
+    if (status.caseMessageId) {
+      const { chatId, caseMessageId, profileSaved, code, text, level } = status;
+      profileStatusByMessage.set(caseMessageId, { chatId, caseMessageId, profileSaved, code, text, level });
+      if (profileStatusByMessage.size > 32) profileStatusByMessage.delete(profileStatusByMessage.keys().next().value);
+      updateProfileCards(status, true);
+      scheduleProfileCardSync();
+    }
     if (status.chatId && activeChatId && status.chatId !== activeChatId) return;
     const resolvedWidgetPreference = resolveStatusWidgetPreference(
       status,
@@ -1369,9 +1443,9 @@ export function setup(ctx) {
   }
 
   function clearSetupDownload() {
-    if (setupDownloadUrl) URL.revokeObjectURL(setupDownloadUrl);
-    setupDownloadUrl = null;
-    setupDownload.removeAttribute("href");
+    setupSaveGeneration += 1;
+    preparedSetup = null;
+    pendingSavePicker = null;
     setupDownload.hidden = true;
   }
   cleanups.push(clearSetupDownload);
@@ -1413,9 +1487,10 @@ export function setup(ctx) {
   const importSetupButton = createButton("Import Setup — Choose File", chooseSetupFile, true);
   const exportSetupButton = createButton("Export Initial Setup", () => {
     clearSetupDownload();
-    setupFeedback.textContent = "Preparing the original starting setup…";
+    pendingSavePicker = openSetupSavePicker(window);
+    setupFeedback.textContent = pendingSavePicker ? "Choose where to save the setup…" : "Preparing the original starting setup…";
     sendSetupRequest("continuity_export_setup");
-  });
+  }, true);
   const beginSetupButton = createButton("Begin Simulation", () => {
     setupFeedback.textContent = "Starting the imported simulation…";
     sendSetupRequest("continuity_begin_setup");
@@ -1492,20 +1567,42 @@ export function setup(ctx) {
   });
   actions.append(saveButton, refreshButton, reprocessButton, migrateButton, cleanupButton);
 
-  if (typeof MutationObserver === "function" && document.body) {
-    const observer = new MutationObserver((records) => {
-      for (const record of records) {
-        const cards = [...record.addedNodes].flatMap(cardsInside);
-        if (cards.length > 0) {
-          for (const card of cards) armCardWatchdog(card);
-          scheduleProfileCardSync();
-          break;
-        }
+  const profileObservers = new Map();
+  function refreshProfileObservers() {
+    if (typeof MutationObserver !== "function" || !document.body) return;
+    const roots = [document.body];
+    const visit = (scope) => {
+      if (scope.shadowRoot) { roots.push(scope.shadowRoot); visit(scope.shadowRoot); }
+      for (const element of scope.querySelectorAll?.("*") ?? []) {
+        if (element.shadowRoot) { roots.push(element.shadowRoot); visit(element.shadowRoot); }
       }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    cleanups.push(() => observer.disconnect());
+    };
+    visit(document.body);
+    for (const [root, observer] of profileObservers) {
+      if (root.host && !root.host.isConnected) { observer.disconnect(); profileObservers.delete(root); }
+    }
+    for (const root of roots) {
+      if (profileObservers.has(root)) continue;
+      const observer = new MutationObserver((records) => {
+        if (records.some((record) => [...record.addedNodes].some((node) => node.nodeType === 1))) scheduleProfileCardSync();
+      });
+      observer.observe(root, { childList: true, subtree: true });
+      profileObservers.set(root, observer);
+    }
   }
+  refreshProfileObservers();
+  cleanups.push(() => { for (const observer of profileObservers.values()) observer.disconnect(); });
+  const delayedProfileScans = new Set();
+  function rescanDelayedProfiles() {
+    for (const timer of delayedProfileScans) clearTimeout(timer);
+    delayedProfileScans.clear();
+    for (const delay of [100, 500, 1500, 3000]) {
+      const timer = setTimeout(() => { delayedProfileScans.delete(timer); scheduleProfileCardSync(); }, delay);
+      delayedProfileScans.add(timer);
+    }
+  }
+  cleanups.push(() => { for (const timer of delayedProfileScans) clearTimeout(timer); });
+  rescanDelayedProfiles();
   for (const card of mountedProfileCards()) armCardWatchdog(card);
   cleanups.push(() => {
     for (const timer of watchdogTimers) clearTimeout(timer);
@@ -1529,13 +1626,30 @@ export function setup(ctx) {
       setupBusy = false;
       setupFeedback.textContent = payload.message;
       if (payload.ok && typeof payload.fileText === "string") {
-        clearSetupDownload();
-        setupDownloadUrl = URL.createObjectURL(new Blob([payload.fileText], { type: "application/json" }));
-        setupDownload.href = setupDownloadUrl;
-        setupDownload.download = "date-simulator-initial-setup.json";
-        setupDownload.hidden = false;
-        setupDownload.click();
-        setupFeedback.textContent = "Initial setup prepared. If the download did not start, select Save setup file.";
+        const generation = setupSaveGeneration;
+        const chatId = activeChatId;
+        preparedSetup = { fileText: payload.fileText, chatId };
+        const picker = pendingSavePicker;
+        pendingSavePicker = null;
+        setupBusy = true;
+        finishSetupSave(picker, payload.fileText, () => generation === setupSaveGeneration && chatId === activeChatId)
+          .then((outcome) => {
+            if (generation !== setupSaveGeneration || chatId !== activeChatId) return;
+            setupDownload.hidden = outcome === "canceled" || outcome === "stale";
+            setupFeedback.textContent = outcome === "saved" ? "Initial setup saved to the selected JSON file."
+              : outcome === "canceled" ? "Save canceled. No file was written."
+              : "Setup ready. Select Download JSON File. This browser/connection does not provide a native Save As window; browser download settings apply.";
+          })
+          .catch((error) => {
+            if (generation !== setupSaveGeneration || chatId !== activeChatId) return;
+            setupDownload.hidden = false;
+            setupFeedback.textContent = `Could not save the file: ${String(error?.message ?? error)}. You can retry with Download JSON File.`;
+          })
+          .finally(() => {
+            if (generation !== setupSaveGeneration || chatId !== activeChatId) return;
+            setupBusy = false;
+            renderSetupControls();
+          });
       }
       if (payload.status) renderStatus(payload.status);
       renderSetupControls();
@@ -1600,7 +1714,11 @@ export function setup(ctx) {
   }
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
-      if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
+      if (typeof payload?.chatId === "string" && payload.chatId) {
+        if (eventName === "CHARACTER_MESSAGE_RENDERED" || !activeChatId) activeChatId = payload.chatId;
+        else if (payload.chatId !== activeChatId) return;
+      }
+      rescanDelayedProfiles();
       for (const card of mountedProfileCards()) armCardWatchdog(card);
       requestStatus();
       scheduleProfileCardSync();
@@ -1612,6 +1730,7 @@ export function setup(ctx) {
   ctx.sendToBackend({ type: "continuity_get_connections" });
 
   return () => {
+    disposed = true;
     destroyStatusWidget();
     for (const handle of mountedComponents.reverse()) {
       try { handle.destroy(); } catch { /* best-effort cleanup */ }

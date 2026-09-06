@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Continuity Engine UI regression fixture</title>
+<style>
+  :root { --lumiverse-text:#e8e4f0; --lumiverse-text-muted:#ada7bc; --lumiverse-text-dim:#9992aa; --lumiverse-primary:#7654ae; --lumiverse-border:rgba(147,112,219,.12); --lumiverse-fill-subtle:rgba(0,0,0,.1); }
+  body { margin:24px; background:#19171f; color:var(--lumiverse-text); font:15px/1.5 system-ui; }
+  .layout { display:grid; grid-template-columns:minmax(320px,1fr) 430px; gap:32px; }
+  main, #drawer { padding:20px; border:1px solid #50475f; border-radius:12px; }
+  h1 { font-size:20px; } h2 { font-size:17px; }
+  #log { white-space:pre-wrap; font-size:12px; }
+  @media(max-width:850px) { .layout { grid-template-columns:1fr; } }
+</style>
+<h1>Continuity Engine UI regression fixture</h1>
+<p>Uses release markup and the actual frontend with a synthetic backend. This does not connect to a provider.</p>
+<label><input type="checkbox" id="fallback"> Test download fallback (disable native Save As)</label>
+<div class="layout">
+  <main><h2>Startup greeting</h2><div id="greeting"></div><h2>Delayed profile rendering</h2><div id="profile"></div><pre id="log"></pre></main>
+  <aside id="drawer"></aside>
+</div>
+<script type="module">
+  import { setup } from "../src/frontend.js";
+  const fixture = await (await fetch("./fixtures/date-simulator-v1.5.6-setup.json")).json();
+  const root = document.querySelector("#drawer");
+  const profileHost = document.querySelector("#profile");
+  const nativePicker = window.showSaveFilePicker?.bind(window);
+  document.querySelector("#fallback").addEventListener("change", event => {
+    window.showSaveFilePicker = event.target.checked ? undefined : nativePicker;
+  });
+  const log = text => { document.querySelector("#log").textContent += `${text}\n`; };
+  const status = { type:"continuity_status", chatId:"fixture-chat", caseMessageId:"fixture-profile", profileSaved:true, code:"ready", level:"green", text:"Private profile saved", config:{showStatusWidget:false}, setup:{canExport:true,canImport:true,fingerprint:"fixture"} };
+  let receive;
+  const dispose = setup({
+    deferReady() {}, ready() {},
+    dom:{
+      addStyle(css) { const style=document.createElement("style"); style.textContent=css; document.head.append(style); return ()=>style.remove(); },
+      findMessageElement:id=>id==="fixture-profile"?profileHost:null,
+      listMessageElements:()=>[profileHost], cleanup() {},
+    },
+    ui:{registerDrawerTab:()=>({root,destroy() {},activate() {},setBadge() {},onActivate:()=>()=>{}})},
+    events:{on:()=>()=>{}},
+    uploads:{pickFile:()=>new Promise(resolve=>{
+      const input=document.createElement("input"); input.type="file"; input.accept=".json,application/json"; input.hidden=true;
+      document.body.append(input);
+      input.addEventListener("change",async()=>{const file=input.files[0]; input.remove(); log("Import file picker returned a file"); resolve(file?[{bytes:new Uint8Array(await file.arrayBuffer()),sizeBytes:file.size}]:[]);},{once:true});
+      input.addEventListener("cancel",()=>{input.remove();resolve([]);},{once:true});
+      input.click();
+    })},
+    onBackendMessage(callback) { receive=callback;return()=>{}; },
+    sendToBackend(message) {
+      setTimeout(()=>{
+        if(message.type==="continuity_get_status")receive(status);
+        if(message.type==="continuity_export_setup"){
+          log("Backend returned synthetic setup JSON");
+          receive({type:"continuity_setup_result",requestId:message.requestId,chatId:message.chatId,ok:true,message:"Initial setup prepared",fileText:JSON.stringify({format:"date-simulator-initial-setup",version:1,profile:fixture.profile,initialState:{fixtureOnly:true}},null,2)});
+        }
+        if(message.type==="continuity_import_setup")log("Import request received by fixture backend");
+      },150);
+    },
+  });
+  document.querySelector("#greeting").innerHTML=fixture.importButtonHtml;
+  receive(status);
+  // Status deliberately arrives before the HTML island is attached.
+  setTimeout(()=>{profileHost.attachShadow({mode:"open"}).innerHTML=fixture.profileCardHtml;},250);
+  window.addEventListener("pagehide",dispose,{once:true});
+</script>
+</html>

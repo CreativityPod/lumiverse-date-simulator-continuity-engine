@@ -34,7 +34,7 @@ Import is serialized with chat reconciliation. It checks the selected startup pr
 
 `/begin` is observation-only and excluded from tracker turns; the v1.5.6 card presents observable baseline facts without recasting, a duplicate capsule, time advancement, or new actions. Begin uses the host's append-and-generate API outside the continuity queue so the normal prompt interceptor cannot deadlock. Normal turns thereafter use the usual tracker transaction. Import does not require or consume a background generation.
 
-The frontend opens `ctx.uploads.pickFile` directly from a user click. A typed startup command opens the drawer via a backend event, then a Choose File click provides browser activation. Requests bind to the selected chat and its prefix; frontend responses bind to request IDs. Export uses a JSON Blob and a downloadable anchor, retains an explicit save link if automatic download is blocked, and revokes the Blob URL on replacement, chat switch, or teardown. An import never puts the file in an ordinary chat attachment.
+The frontend opens `ctx.uploads.pickFile` directly from a user click. A typed startup command opens the drawer via a backend event, then a Choose File click provides browser activation. Requests bind to the selected chat and its prefix; frontend responses bind to request IDs. Export opens `showSaveFilePicker` synchronously from the original click when available on a secure connection, then writes the backend JSON to the selected file. Save completion requires the writable stream to close successfully. Unsupported connections use a second explicit Download JSON File button and an attached data-URL download anchor. Prepared private data and pending saves are invalidated on replacement, chat switch, or teardown. Cancellation does not trigger fallback downloads. An import never puts the file in an ordinary chat attachment.
 
 ## Update transaction
 
@@ -75,3 +75,5 @@ Every status payload also contains a deliberately narrow public projection for t
 ## Migration
 
 Legacy cases are not processed until the user explicitly requests migration. A successful migration produces one baseline checkpoint at the latest eligible selected turn. Subsequent updates start after that baseline. Editing or swiping away the baseline invalidates it and requires a new conservative reconciliation.
+
+Profile status is cached by case-message ID without private payloads and reapplied when message DOM arrives. Observers cover open Shadow DOM roots, with bounded delayed rescans for roots attached after the host event. Exact-message updates run before drawer rendering; unrelated background MESSAGE_SENT events cannot change the active chat.
