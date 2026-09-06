@@ -246,9 +246,6 @@ export function createButton(text, action, primary = false) {
   button.type = "button";
   button.className = `dsc-button${primary ? " dsc-button-primary" : ""}`;
   button.textContent = text;
-  // Host themes use very faint separator colors. Controls need a visible
-  // boundary even when a drawer stylesheet is delayed or a theme resets buttons.
-  button.style.cssText = `appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:9px 14px;border:1px solid var(--lumiverse-text-muted,#b6afc8);border-radius:8px;background:${primary ? "var(--lumiverse-primary,#68529e)" : "rgba(127,127,127,.16)"};color:${primary ? "#fff" : "var(--lumiverse-text,#eeeaf5)"};font:inherit;font-size:13px;font-weight:600;line-height:1.3;cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.1);`;
   button.addEventListener("click", action);
   return button;
 }
@@ -380,16 +377,11 @@ export async function finishSetupSave(picker, fileText, isCurrent = () => true) 
   }
 }
 
-// A separate real click is required on hosts without the native save API.
-// A data URL avoids relying on a Blob URL created in an asynchronous callback.
-export function downloadSetupFile(fileText, ownerDocument) {
-  const anchor = ownerDocument.createElement("a");
+// Keep a real download hyperlink mounted so the browser handles the user's
+// original click. Do not proxy it through a synthetic click on a hidden anchor.
+export function prepareSetupDownload(anchor, fileText) {
   anchor.href = `data:application/json;charset=utf-8,${encodeURIComponent(fileText)}`;
   anchor.download = SETUP_FILENAME;
-  anchor.style.display = "none";
-  anchor.addEventListener("click", (event) => event.stopPropagation());
-  ownerDocument.body.appendChild(anchor);
-  try { anchor.click(); } finally { anchor.remove(); }
 }
 
 export function setup(ctx) {
@@ -447,14 +439,14 @@ export function setup(ctx) {
     .dsc-control-slot { min-width: 0; }
     .dsc-actions-section { display: grid; gap: 8px; padding-top: 2px; }
     .dsc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    .dsc-button { appearance: none; display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 8px 14px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted); font: inherit; font-size: .78rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
+    .dsc-button { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px; border: 1px solid var(--lumiverse-border, rgba(147,112,219,.12)); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted, #ada7bc); font-family: inherit; font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-weight: 500; cursor: pointer; white-space: nowrap; text-decoration: none; transition: background var(--lumiverse-transition-fast, .15s), color var(--lumiverse-transition-fast, .15s), border-color var(--lumiverse-transition-fast, .15s); }
     .dsc-button:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
-    .dsc-button:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 2px; }
-    .dsc-button-primary { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); }
-    .dsc-button-primary:hover:not(:disabled) { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); filter: brightness(1.06); }
-    .dsc-button-danger { border-color: var(--lumiverse-warning, #c89b62); color: var(--lumiverse-warning, #c89b62); }
-    .dsc-button-danger:hover:not(:disabled) { border-color: var(--lumiverse-warning, #c89b62); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-warning, #c89b62); }
-    .dsc-button:disabled { opacity: .5; cursor: wait; }
+    .dsc-button:focus-visible { outline: 2px solid var(--lumiverse-primary, #9370db); outline-offset: 2px; }
+    .dsc-button-primary { border-color: var(--lumiverse-primary, #9370db); background: var(--lumiverse-primary, #9370db); color: var(--lumiverse-primary-contrast, #fff); }
+    .dsc-button-primary:hover:not(:disabled) { background: var(--lumiverse-primary-hover, #a080e0); color: var(--lumiverse-primary-contrast, #fff); }
+    .dsc-button-danger { border-color: var(--lumiverse-danger, #ef4444); color: var(--lumiverse-danger, #ef4444); }
+    .dsc-button-danger:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-danger, #ef4444); }
+    .dsc-button:disabled { opacity: .4; cursor: not-allowed; }
     .dsc-fallback-control { box-sizing: border-box; width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); font: inherit; font-size: .78rem; }
     .dsc-fallback-control:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 1px; }
     .dsc-fallback-check { display: flex; align-items: flex-start; gap: 8px; color: var(--lumiverse-text-muted); font-size: .78rem; }
@@ -577,15 +569,19 @@ export function setup(ctx) {
   setupFeedback.className = "dsc-hint";
   setupFeedback.setAttribute("aria-live", "polite");
   setupFeedback.textContent = "Save the private profile and original starting state as a JSON file. The file is readable outside the simulation.";
-  const setupDownload = createButton("Download JSON File", () => {
-    if (!preparedSetup || preparedSetup.chatId !== activeChatId) return;
-    try {
-      downloadSetupFile(preparedSetup.fileText, document);
-      setupFeedback.textContent = "Download requested. Check your browser’s Downloads. A Save As window depends on your browser settings on this connection.";
-    } catch (error) {
-      setupFeedback.textContent = `Download could not start: ${String(error?.message ?? error)}`;
+  const setupDownload = document.createElement("a");
+  setupDownload.className = "dsc-button dsc-button-primary";
+  setupDownload.textContent = "Download JSON File";
+  setupDownload.addEventListener("click", (event) => {
+    if (!preparedSetup || preparedSetup.chatId !== activeChatId || setupDownload.hidden) {
+      event.preventDefault();
+      return;
     }
-  }, true);
+    // Preserve the link's default download action and repeatability. Stop host
+    // drawer link handlers from rerouting the click as in-app navigation.
+    event.stopPropagation();
+    setupFeedback.textContent = "Download requested. Check your browser’s Downloads. If no window opens, check this site’s download permissions in the address bar.";
+  });
   setupDownload.hidden = true;
   setupSection.append(setupTitle, setupActions, setupFeedback, setupDownload);
   panel.append(statusRow, setupSection, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
@@ -1444,6 +1440,8 @@ export function setup(ctx) {
   function clearSetupDownload() {
     setupSaveGeneration += 1;
     preparedSetup = null;
+    setupDownload.removeAttribute("href");
+    setupDownload.removeAttribute("download");
     pendingSavePicker = null;
     setupDownload.hidden = true;
   }
@@ -1628,6 +1626,7 @@ export function setup(ctx) {
         const generation = setupSaveGeneration;
         const chatId = activeChatId;
         preparedSetup = { fileText: payload.fileText, chatId };
+        prepareSetupDownload(setupDownload, payload.fileText);
         const picker = pendingSavePicker;
         pendingSavePicker = null;
         setupBusy = true;
@@ -1688,8 +1687,9 @@ export function setup(ctx) {
     }
   }));
 
-  cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
-    activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
+  function changeActiveChat(chatId) {
+    if (chatId === activeChatId) return;
+    activeChatId = chatId;
     latestStatus = null;
     privateStateCache = null;
     setupRequest = null;
@@ -1703,6 +1703,9 @@ export function setup(ctx) {
     renderPrivateState(null);
     for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
+  }
+  cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
+    changeActiveChat(typeof payload?.chatId === "string" ? payload.chatId : null);
   }));
   for (const eventName of ["GENERATION_STARTED", "GENERATION_ENDED", "GENERATION_STOPPED"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
@@ -1714,7 +1717,7 @@ export function setup(ctx) {
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
       if (typeof payload?.chatId === "string" && payload.chatId) {
-        if (eventName === "CHARACTER_MESSAGE_RENDERED" || !activeChatId) activeChatId = payload.chatId;
+        if (eventName === "CHARACTER_MESSAGE_RENDERED" || !activeChatId) changeActiveChat(payload.chatId);
         else if (payload.chatId !== activeChatId) return;
       }
       rescanDelayedProfiles();

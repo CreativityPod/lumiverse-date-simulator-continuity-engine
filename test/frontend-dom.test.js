@@ -49,7 +49,7 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [] } = {})
     }
   });
   const status = (extra = {}) => receive({ type: "continuity_status", chatId: "chat-1", caseMessageId: "case-1", profileSaved: true, code: "ready", level: "green", text: "Ready", config: { showStatusWidget: false }, setup: { canExport: true, canImport: true, fingerprint: "prefix-1" }, ...extra });
-  const button = text => [...root.querySelectorAll("button")].find(node => node.textContent === text);
+  const button = text => [...root.querySelectorAll("button, a.dsc-button")].find(node => node.textContent === text);
   const result = () => {
     const request = sent.findLast(message => message.type === "continuity_export_setup");
     assert.ok(request);
@@ -125,26 +125,31 @@ test("Save As opens in the original click before the backend responds, and write
 test("remote HTTP export uses an explicit download click with exact JSON and filename", async t => {
   const downloads = [];
   const h = mount(t, { secure: false, savePicker: () => { throw new Error("HTTP must not open native picker"); } });
-  h.window.HTMLAnchorElement.prototype.click = function () {
-    downloads.push({ href: this.href, filename: this.download, connected: this.isConnected });
-  };
+  h.window.HTMLAnchorElement.prototype.click = () => assert.fail("No synthetic anchor clicks");
+  h.button("Download JSON File").addEventListener("click", event => {
+    const link = event.currentTarget;
+    assert.equal(event.defaultPrevented, false);
+    downloads.push({ href: link.href, filename: link.download, connected: link.isConnected });
+    event.preventDefault(); // Stand in for the browser download, absent in JSDOM.
+  });
   h.status();
   const exportButton = h.button("Export Initial Setup");
   assert.equal(exportButton.tagName, "BUTTON");
-  assert.equal(exportButton.style.minHeight, "38px");
+  assert.equal(h.window.getComputedStyle(exportButton).fontWeight, "500");
+  assert.equal(exportButton.style.border, "");
   exportButton.click();
   h.result();
   await tick();
   assert.equal(downloads.length, 0);
   const downloadButton = h.button("Download JSON File");
-  assert.equal(downloadButton.tagName, "BUTTON");
+  assert.equal(downloadButton.tagName, "A");
   assert.equal(downloadButton.hidden, false);
-  downloadButton.click();
+  downloadButton.dispatchEvent(new h.window.MouseEvent("click", { bubbles: true, cancelable: true }));
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].filename, SETUP_FILENAME);
   assert.equal(downloads[0].connected, true);
   assert.equal(decodeURIComponent(downloads[0].href.split(",").slice(1).join(",")), fileText);
-  assert.equal(h.window.document.querySelectorAll("a[download]").length, 0);
+  assert.equal(h.window.document.querySelectorAll("a[download]").length, 1);
 });
 
 test("canceling Save As never claims success or triggers a download", async t => {
@@ -196,4 +201,65 @@ test("the release greeting has a visible outlined button that opens the import p
   assert.equal(calls, 1);
   await tick();
   assert.match(h.root.textContent, /File selection canceled/);
+});
+
+test("native export can save repeatedly in one chat and after switching chats", async t => {
+  const writes = [];
+  let calls = 0;
+  const h = mount(t, { savePicker: async () => {
+    calls++;
+    return { createWritable: async () => ({ write: async text => writes.push(text), close: async () => {} }) };
+  } });
+  h.status();
+  for (let i = 0; i < 3; i++) {
+    if (i === 2) { h.event("CHAT_SWITCHED", { chatId: "chat-2" }); h.status({ chatId: "chat-2" }); }
+    assert.equal(h.button("Export Initial Setup").disabled, false);
+    h.button("Export Initial Setup").click(); h.result(); await tick();
+  }
+  assert.equal(calls, 3);
+  assert.deepEqual(writes, [fileText, fileText, fileText]);
+});
+
+test("fallback export and download can repeat in the same chat and a new chat", async t => {
+  const h = mount(t, { secure: false });
+  let downloads = 0;
+  h.window.HTMLAnchorElement.prototype.click = () => assert.fail("No synthetic anchor clicks");
+  h.button("Download JSON File").addEventListener("click", event => {
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(event.currentTarget.download, SETUP_FILENAME);
+    assert.equal(event.currentTarget.isConnected, true);
+    downloads++;
+    event.preventDefault();
+  });
+  h.status();
+  for (let i = 0; i < 3; i++) {
+    if (i === 2) { h.event("CHAT_SWITCHED", { chatId: "chat-2" }); h.status({ chatId: "chat-2" }); }
+    assert.equal(h.button("Export Initial Setup").disabled, false);
+    h.button("Export Initial Setup").click(); h.result(); await tick();
+    h.button("Download JSON File").dispatchEvent(new h.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    h.button("Download JSON File").dispatchEvent(new h.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  }
+  assert.equal(downloads, 6);
+});
+
+test("a rendered chat change releases a pending save without waiting for CHAT_SWITCHED", async t => {
+  let select;
+  const h = mount(t, { savePicker: () => new Promise(resolve => { select = resolve; }) });
+  h.status(); h.button("Export Initial Setup").click(); h.result();
+  h.event("CHARACTER_MESSAGE_RENDERED", { chatId: "chat-2" });
+  h.status({ chatId: "chat-2" });
+  select({ createWritable: async () => assert.fail("Old chat must not write") });
+  await tick();
+  assert.equal(h.button("Export Initial Setup").disabled, false);
+});
+
+test("disabled drawer buttons use Lumiverse opacity and cursor with no inline overrides", t => {
+  const h = mount(t);
+  const button = h.button("Export Initial Setup");
+  assert.equal(button.disabled, true);
+  const style = h.window.getComputedStyle(button);
+  assert.equal(style.opacity, "0.4");
+  assert.equal(style.cursor, "not-allowed");
+  assert.equal(style.fontWeight, "500");
+  assert.equal(button.getAttribute("style"), null);
 });
