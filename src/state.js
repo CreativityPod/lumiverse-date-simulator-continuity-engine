@@ -3,6 +3,7 @@ import {
   cloneEmptyState,
   trackerSourceMessageIds,
   upgradeTrackerState,
+  validateTrackerStateDetailed,
 } from "./schemas.js";
 
 export const CHAT_KEYS = Object.freeze({
@@ -22,9 +23,96 @@ export const CASE_PATTERN = /<!--DATE_SIM_CASE\s*([\s\S]*?)\s*END_DATE_SIM_CASE-
 export const LEGACY_SCENE_PATTERN = /<!--DATE_SIM_SCENE\s*([\s\S]*?)\s*END_DATE_SIM_SCENE-->/gi;
 export const RESET_PATTERN = /<!--DATE_SIM_RESET\s*-->/gi;
 export const STARTUP_MENU_PATTERN = /<!--DATE_SIM_STARTUP_MENU_V1\s*-->/gi;
+export const IMPORT_SETUP_PATTERN = /<!--DATE_SIM_IMPORT_SETUP_V1\s*-->/gi;
 export const CANONICAL_PATTERN = /\n?<date_simulator_continuity_engine\b[\s\S]*?<\/date_simulator_continuity_engine>\n?/gi;
 export const CASE_SAMPLER_PATTERN = /\n?<date_simulator_case_sampler\b[\s\S]*?<\/date_simulator_case_sampler>\n?/gi;
 export const SAVED_CASE_FALLBACK_PATTERN = /<date_simulator_saved_case_fallback\b[^>]*>[\s\S]*?<\/date_simulator_saved_case_fallback>/gi;
+
+export const SETUP_FORMAT = "date-simulator-initial-setup";
+export const MAX_SETUP_BYTES = 256 * 1024;
+export const IMPORT_LOADED_TEXT = "Saved setup loaded. Use Begin Simulation in the Continuity drawer, or type /begin to present the starting scene.";
+export const BEGIN_SETUP_TEXT = "/begin";
+
+// Portable provenance names the baseline, never the source chat or its messages.
+export function assignSetupSources(value, sourceId) {
+  if (Array.isArray(value)) return value.map((child) => assignSetupSources(child, sourceId));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key, key === "sourceMessageId" && child ? sourceId : assignSetupSources(child, sourceId),
+  ]));
+}
+
+export function validateSetupFile(input) {
+  try {
+    const encoded = typeof input === "string" ? input : JSON.stringify(input);
+    if (!encoded || new TextEncoder().encode(encoded).length > MAX_SETUP_BYTES) {
+      throw new Error("Setup file is empty or exceeds 256 KB.");
+    }
+    const value = JSON.parse(encoded.replace(/^\uFEFF/, ""));
+    if (!value || Array.isArray(value) || typeof value !== "object"
+      || Object.keys(value).sort().join(",") !== "format,initialState,profile,version") {
+      throw new Error("Expected a Date Simulator initial setup file.");
+    }
+    if (value.format !== SETUP_FORMAT || value.version !== 1) {
+      throw new Error("Unsupported setup file format or version.");
+    }
+    if (typeof value.profile !== "string") throw new Error("Setup profile must be text.");
+    const profile = validateCaseCapsuleDetailed(value.profile);
+    if (!profile.value) throw new Error(profile.error);
+    if (!/\bDate Simulator v1\.(?:4|5)(?:\.\d+)?\b/.test(profile.value.split("\n")[0])) {
+      throw new Error("This setup requires a Date Simulator v1.4 or v1.5 profile.");
+    }
+    if (/<\/?[a-z][^>]*>/i.test(profile.value)) throw new Error("Setup profile must not contain markup.");
+    if (trackerSourceMessageIds(value.initialState).some((id) => id !== "initial-setup")) {
+      throw new Error("Setup state contains nonportable message references.");
+    }
+    const result = validateTrackerStateDetailed(value.initialState, {
+      allowedSourceMessageIds: ["initial-setup"],
+      teenMode: /\bTeen Mode\b/i.test(profile.value),
+    });
+    if (!result.state) throw new Error(`Invalid initial state: ${result.error}`);
+    return { value: { format: SETUP_FORMAT, version: 1, profile: profile.value, initialState: result.state }, error: "" };
+  } catch (error) {
+    return { value: null, error: error instanceof SyntaxError ? "Setup file is not valid JSON." : String(error?.message ?? error) };
+  }
+}
+
+export function importedSetupForMessage(message) {
+  if (message?.role !== "assistant" || contentToText(message.content) !== IMPORT_LOADED_TEXT) return null;
+  const saved = message.metadata?.date_simulator_setup;
+  return saved ? validateSetupFile(saved).value : null;
+}
+
+export function isImportSetupSelection(messages) {
+  if (deriveTranscriptContext(messages).active) return false;
+  const last = messages?.at(-1);
+  if (last?.role !== "user") return false;
+  const text = contentToText(last.content).trim();
+  if (/^(?:\/import|import saved setup)[.!]?$/i.test(text)) return true;
+  const previous = precedingAssistantMessage(messages, messages.length - 1);
+  return /^5[.!]?$/.test(text)
+    && /<!--DATE_SIM_STARTUP_MENU_V1-->/.test(contentToText(previous?.content))
+    && /Import Saved Setup/i.test(contentToText(previous?.content));
+}
+
+// Freeze once per exact opening. Reprocessing that opening must not silently
+// replace an exported baseline; editing/swiping it invalidates the fingerprint.
+export function initialSetupForBranch(store, turns, caseText) {
+  const first = turns[0];
+  if (!first) return null;
+  if (!importedSetupForMessage(first.assistant)
+    && !new RegExp(CASE_PATTERN.source, CASE_PATTERN.flags).test(contentToText(first.assistant?.content))) return null;
+  const frozen = store.initialSetup;
+  if (frozen?.key === first.key && frozen.fingerprint === first.fingerprint && frozen.caseText === caseText) {
+    const validation = validateSetupFile({ format: SETUP_FORMAT, version: 1, profile: caseText,
+      initialState: assignSetupSources(frozen.state, "initial-setup") });
+    if (validation.value) return frozen;
+  }
+  const checkpoint = selectCheckpoint(store, first);
+  if (!checkpoint || checkpoint.migrated) return null;
+  return { key: first.key, fingerprint: first.fingerprint, caseText,
+    state: JSON.parse(JSON.stringify(checkpoint.state)), createdAt: checkpoint.createdAt };
+}
 
 const CASE_FIELDS = [
   "CASE",
@@ -111,6 +199,7 @@ export function stripManagedText(text) {
     .replace(new RegExp(LEGACY_SCENE_PATTERN.source, LEGACY_SCENE_PATTERN.flags), "")
     .replace(new RegExp(RESET_PATTERN.source, RESET_PATTERN.flags), "")
     .replace(new RegExp(STARTUP_MENU_PATTERN.source, STARTUP_MENU_PATTERN.flags), "")
+    .replace(new RegExp(IMPORT_SETUP_PATTERN.source, IMPORT_SETUP_PATTERN.flags), "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -223,10 +312,9 @@ export function stripStartupMenuMarkers(messages) {
     return {
       ...message,
       content: mapTextContent(message.content, (text) => {
-        const pattern = new RegExp(STARTUP_MENU_PATTERN.source, STARTUP_MENU_PATTERN.flags);
-        if (!pattern.test(text)) return text;
         return normalizeNewlines(text)
           .replace(new RegExp(STARTUP_MENU_PATTERN.source, STARTUP_MENU_PATTERN.flags), "")
+          .replace(new RegExp(IMPORT_SETUP_PATTERN.source, IMPORT_SETUP_PATTERN.flags), "")
           .replace(/\n{3,}/g, "\n\n")
           .trim();
       }),
@@ -319,7 +407,8 @@ export function prefixFingerprint(messages, inclusiveIndex) {
   let hash = 2166136261;
   const bounded = (messages ?? []).slice(0, inclusiveIndex + 1);
   for (const message of bounded) {
-    const token = `${message?.id ?? ""}:${messageSwipeId(message)}:${message?.role ?? ""}:${contentToText(message?.content)}|`;
+    const imported = importedSetupForMessage(message);
+    const token = `${message?.id ?? ""}:${messageSwipeId(message)}:${message?.role ?? ""}:${contentToText(message?.content)}|${imported ? JSON.stringify(imported) : ""}`;
     for (let index = 0; index < token.length; index += 1) {
       hash ^= token.charCodeAt(index);
       hash = Math.imul(hash, 16777619);
@@ -388,6 +477,8 @@ export function deriveTranscriptContext(messages) {
     if (!text) continue;
 
     const markers = [];
+    const imported = importedSetupForMessage(message);
+    if (imported) markers.push({ kind: "case", at: -1, body: imported.profile });
     for (const match of text.matchAll(new RegExp(CASE_PATTERN.source, CASE_PATTERN.flags))) {
       markers.push({ kind: "case", at: match.index ?? 0, body: match[1] });
     }
@@ -453,7 +544,7 @@ function precedingUser(messages, assistantIndex) {
   return { message: null, index: -1 };
 }
 
-const NON_TRACKING_COMMAND = /^\s*\/(?:look|scene|debrief|new)\b/i;
+const NON_TRACKING_COMMAND = /^\s*\/(?:look|scene|debrief|new|begin)\b/i;
 
 export function listEligibleTurns(messages, context) {
   if (!context?.active) return [];
@@ -469,7 +560,7 @@ export function listEligibleTurns(messages, context) {
     ) continue;
     const user = precedingUser(messages, index);
     const userText = contentToText(user.message?.content);
-    if (NON_TRACKING_COMMAND.test(userText)) continue;
+    if (NON_TRACKING_COMMAND.test(userText) && !importedSetupForMessage(assistant)) continue;
     turns.push({
       assistant,
       assistantIndex: index,
@@ -501,6 +592,7 @@ export function createStore(chatId) {
     epochKey: "",
     caseText: "",
     current: null,
+    initialSetup: null,
     checkpoints: {},
     revision: 0,
     migrationAccepted: false,

@@ -334,6 +334,16 @@ export function cardsInside(root) {
   return [...new Set(cards)];
 }
 
+export async function pickSetupFile(ctx, target, getActiveChatId) {
+  if (typeof ctx.uploads?.pickFile !== "function") throw new Error("Update Lumiverse to use setup file imports.");
+  const files = await ctx.uploads.pickFile({ accept: [".json", "application/json"], multiple: false, maxSizeBytes: 256 * 1024 });
+  if (!files?.length) return null;
+  if (getActiveChatId() !== target.chatId) throw new Error("The active chat changed. Choose the file again in the intended chat.");
+  const file = files[0];
+  if (file.sizeBytes > 256 * 1024 || file.bytes?.byteLength > 256 * 1024) throw new Error("Setup file exceeds 256 KB.");
+  return new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
+}
+
 export function setup(ctx) {
   ctx.deferReady();
   const cleanups = [];
@@ -356,8 +366,14 @@ export function setup(ctx) {
   const statusWidgetRevisionByChat = new Map();
   const cardWatchdogs = new WeakMap();
   const watchdogTimers = new Set();
+  let setupBusy = false;
+  let setupRequest = null;
+  let setupRequestSequence = 0;
+  let setupDownloadUrl = null;
+  let generationBusy = false;
 
   const removeStyle = ctx.dom.addStyle(`
+    .dsc-panel [hidden] { display: none !important; }
     .dsc-panel { color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 16px; }
     .dsc-status-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 2px 0 12px; border-bottom: 1px solid var(--lumiverse-border); }
     .dsc-status-copy { min-width: 0; display: grid; gap: 4px; }
@@ -495,7 +511,22 @@ export function setup(ctx) {
   actionStatus.textContent = "Reprocess and migration progress will appear here.";
   actionsSection.append(actions, actionStatus);
 
-  panel.append(statusRow, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
+  const setupSection = document.createElement("section");
+  setupSection.className = "dsc-section";
+  const setupTitle = document.createElement("div");
+  setupTitle.className = "dsc-section-title";
+  setupTitle.textContent = "Saved setup";
+  const setupActions = document.createElement("div");
+  setupActions.className = "dsc-actions";
+  const setupFeedback = document.createElement("div");
+  setupFeedback.className = "dsc-hint";
+  setupFeedback.setAttribute("aria-live", "polite");
+  setupFeedback.textContent = "Save the private profile and original starting state as a JSON file. The file is readable outside the simulation.";
+  const setupDownload = document.createElement("a");
+  setupDownload.textContent = "Save setup file";
+  setupDownload.hidden = true;
+  setupSection.append(setupTitle, setupActions, setupFeedback, setupDownload);
+  panel.append(statusRow, setupSection, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
   tab.root.appendChild(panel);
 
   const stateText = document.createElement("pre");
@@ -1294,6 +1325,7 @@ export function setup(ctx) {
   }
 
   function renderStatus(status) {
+    if (status.chatId && activeChatId && status.chatId !== activeChatId) return;
     const resolvedWidgetPreference = resolveStatusWidgetPreference(
       status,
       pendingStatusWidgetPreference,
@@ -1322,7 +1354,84 @@ export function setup(ctx) {
     tab.setBadge(status.level === "green" ? null : "!");
     updateProfileCards(status);
     syncStatusWidget(status);
+    renderSetupControls();
   }
+
+  function renderSetupControls() {
+    const available = latestStatus?.setup ?? {};
+    importSetupButton.disabled = setupBusy || generationBusy || !available.canImport;
+    exportSetupButton.disabled = setupBusy || !available.canExport;
+    beginSetupButton.disabled = setupBusy || generationBusy || !available.canBegin;
+    beginSetupButton.hidden = !available.canBegin;
+    importSetupButton.title = available.canImport ? "Choose a saved setup JSON file" : "Open a v1.5.6 startup menu to import a setup";
+    exportSetupButton.title = available.canExport ? "Save the frozen opening baseline" : "The original opening checkpoint is not available yet";
+  }
+
+  function clearSetupDownload() {
+    if (setupDownloadUrl) URL.revokeObjectURL(setupDownloadUrl);
+    setupDownloadUrl = null;
+    setupDownload.removeAttribute("href");
+    setupDownload.hidden = true;
+  }
+  cleanups.push(clearSetupDownload);
+
+  function sendSetupRequest(type, extra = {}) {
+    setupBusy = true;
+    setupRequest = { id: `setup-${++setupRequestSequence}`, chatId: activeChatId };
+    renderSetupControls();
+    ctx.sendToBackend({ type, chatId: activeChatId, requestId: setupRequest.id, ...extra });
+  }
+
+  async function chooseSetupFile() {
+    tab.activate();
+    if (setupBusy || generationBusy) return;
+    if (!latestStatus?.setup?.canImport || latestStatus.chatId !== activeChatId) {
+      setupFeedback.textContent = "Open a new v1.5.6 chat or reset the active case before importing. If the menu is already open, wait for engine status and try again.";
+      requestStatus();
+      return;
+    }
+    const target = { chatId: activeChatId, fingerprint: latestStatus.setup.fingerprint };
+    setupBusy = true;
+    renderSetupControls();
+    try {
+      const fileText = await pickSetupFile(ctx, target, () => activeChatId);
+      if (fileText === null) {
+        if (activeChatId === target.chatId) setupFeedback.textContent = "File selection canceled. Setup unchanged.";
+        return;
+      }
+      setupFeedback.textContent = "Validating saved setup…";
+      sendSetupRequest("continuity_import_setup", { fileText, fingerprint: target.fingerprint });
+    } catch (error) {
+      if (activeChatId === target.chatId) setupFeedback.textContent = String(error?.message ?? error);
+    } finally {
+      if (!setupRequest) setupBusy = false;
+      renderSetupControls();
+    }
+  }
+
+  const importSetupButton = createButton("Import Setup — Choose File", chooseSetupFile, true);
+  const exportSetupButton = createButton("Export Initial Setup", () => {
+    clearSetupDownload();
+    setupFeedback.textContent = "Preparing the original starting setup…";
+    sendSetupRequest("continuity_export_setup");
+  });
+  const beginSetupButton = createButton("Begin Simulation", () => {
+    setupFeedback.textContent = "Starting the imported simulation…";
+    sendSetupRequest("continuity_begin_setup");
+  }, true);
+  setupActions.append(importSetupButton, exportSetupButton, beginSetupButton);
+  renderSetupControls();
+
+  // Delegation survives delayed greeting rendering and composed Shadow DOM
+  // clicks. The picker is called within the original user click handler.
+  const onSetupClick = (event) => {
+    const button = (event.composedPath?.() ?? [event.target]).find((element) => element?.matches?.("button.ds-import-setup"));
+    if (!button) return;
+    event.preventDefault();
+    chooseSetupFile();
+  };
+  document.addEventListener("click", onSetupClick);
+  cleanups.push(() => document.removeEventListener("click", onSetupClick));
 
   const saveButton = createButton("Save Settings", () => {
     ctx.sendToBackend({
@@ -1409,6 +1518,28 @@ export function setup(ctx) {
   }));
 
   cleanups.push(ctx.onBackendMessage((payload) => {
+    if (payload?.type === "continuity_open_import" && payload.chatId === activeChatId) {
+      tab.activate();
+      setupFeedback.textContent = "Select Choose File to load your saved setup.";
+      requestStatus();
+    }
+    if (payload?.type === "continuity_setup_result" && payload.requestId === setupRequest?.id && payload.chatId === activeChatId) {
+      setupRequest = null;
+      setupBusy = false;
+      setupFeedback.textContent = payload.message;
+      if (payload.ok && typeof payload.fileText === "string") {
+        clearSetupDownload();
+        setupDownloadUrl = URL.createObjectURL(new Blob([payload.fileText], { type: "application/json" }));
+        setupDownload.href = setupDownloadUrl;
+        setupDownload.download = "date-simulator-initial-setup.json";
+        setupDownload.hidden = false;
+        setupDownload.click();
+        setupFeedback.textContent = "Initial setup prepared. If the download did not start, select Save setup file.";
+      }
+      if (payload.status) renderStatus(payload.status);
+      renderSetupControls();
+      requestStatus();
+    }
     if (payload?.type === "continuity_status") renderStatus(payload);
     if (payload?.type === "continuity_connections") {
       latestConnections = Array.isArray(payload.connections) ? payload.connections : [];
@@ -1447,12 +1578,25 @@ export function setup(ctx) {
     activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
     latestStatus = null;
     privateStateCache = null;
+    setupRequest = null;
+    setupBusy = false;
+    generationBusy = false;
+    clearSetupDownload();
+    setupFeedback.textContent = "Import a saved setup at startup, or export the original starting state of this case.";
+    renderSetupControls();
     clearStatusWidgetTimers();
     applyStatusWidgetPresentation(statusWidgetPresentation(null));
     renderPrivateState(null);
     for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
   }));
+  for (const eventName of ["GENERATION_STARTED", "GENERATION_ENDED", "GENERATION_STOPPED"]) {
+    cleanups.push(ctx.events.on(eventName, (payload) => {
+      if (payload?.chatId !== activeChatId) return;
+      generationBusy = eventName === "GENERATION_STARTED";
+      renderSetupControls();
+    }));
+  }
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
       if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;

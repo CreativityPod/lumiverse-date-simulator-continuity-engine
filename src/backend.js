@@ -4,6 +4,15 @@ import {
 import {
   CHAT_KEYS,
   INACTIVE_CASE,
+  SETUP_FORMAT,
+  IMPORT_LOADED_TEXT,
+  BEGIN_SETUP_TEXT,
+  assignSetupSources,
+  importedSetupForMessage,
+  initialSetupForBranch,
+  isImportSetupSelection,
+  validateSetupFile,
+  contentToText,
   buildSurpriseMeSample,
   compactPromptMessages,
   createStore,
@@ -45,6 +54,8 @@ const userByChat = new Map();
 const activeChatByUser = new Map();
 const deletedChats = new Set();
 const pendingCleanupByUser = new Map();
+const beginningSetups = new Set();
+const generatingChats = new Set();
 let interceptorRegistered = false;
 let activeChatId = null;
 let frontendUserId = undefined;
@@ -150,6 +161,7 @@ function isInertStore(value) {
   return (
     !String(value.caseText ?? "").trim()
     && value.current == null
+    && value.initialSetup == null
     && Object.keys(checkpoints).length === 0
     && Number(value.revision ?? 0) === 0
     && value.migrationAccepted !== true
@@ -415,10 +427,12 @@ async function statusPayload(chatId, options = {}) {
   let caseMessageId = null;
   let profileSaved = false;
   let caseError = "";
+  let setup = { canImport: false, canExport: false, canBegin: false, fingerprint: "" };
   if (spindle.permissions.has("chat_mutation")) {
     try {
       const messages = await spindle.chat.getMessages(chatId);
       const transcript = deriveTranscriptContext(messages);
+      setup = setupAvailability(messages, store, base.level === "green");
       caseMessageId = transcript.caseMessageId ?? transcript.invalidCaseMessageId;
       caseError = transcript.caseError;
       profileSaved = Boolean(
@@ -444,6 +458,7 @@ async function statusPayload(chatId, options = {}) {
     revision: store.revision || 0,
     lastRevisionAt: store.lastRevisionAt || "",
     publicState: publicTrackerSnapshot(store.current),
+    setup,
   };
   if (payload.migrationRequired) {
     payload.level = "amber";
@@ -479,6 +494,21 @@ async function statusPayload(chatId, options = {}) {
   }
   if (options.includePrivate) payload.state = store.current;
   return payload;
+}
+
+function setupAvailability(messages, store, ready = true) {
+  const context = deriveTranscriptContext(messages);
+  const turns = listEligibleTurns(messages, context);
+  const markedMenu = messages.some((message) => message.role === "assistant"
+    && /<!--DATE_SIM_STARTUP_MENU_V1-->/.test(contentToText(message.content))
+    && /Import Saved Setup/.test(contentToText(message.content)));
+  const imported = importedSetupForMessage(messages[context.caseMessageIndex]);
+  return {
+    canImport: ready && !context.active && markedMenu,
+    canExport: Boolean(context.active && initialSetupForBranch(store, turns, context.caseText)),
+    canBegin: Boolean(ready && imported && !messages.slice(context.caseMessageIndex + 1).some((m) => m.role === "user")),
+    fingerprint: prefixFingerprint(messages, messages.length - 1),
+  };
 }
 
 async function publishStatus(chatId, options = {}, userId) {
@@ -572,6 +602,19 @@ async function reconcileChat(chatId, options = {}, userId) {
   // generation, provider availability, or structured-output repair.
   store.caseText = context.caseText;
   store.processing = false;
+  // Imported metadata carries a validated portable seed. Rebuild its local
+  // checkpoint without a model call, including after sidecar loss or a fork.
+  const initialTurns = listEligibleTurns(messages, context);
+  const imported = importedSetupForMessage(messages[context.caseMessageIndex]);
+  if (imported && initialTurns[0] && !selectCheckpoint(store, initialTurns[0])) {
+    const first = initialTurns[0];
+    const state = assignSetupSources(imported.initialState, String(first.assistant.id));
+    const createdAt = new Date().toISOString();
+    store.checkpoints[first.key] = { fingerprint: first.fingerprint, state, warnings: [], createdAt, imported: true };
+    store.current = state;
+    recordRevision(store, createdAt);
+  }
+  store.initialSetup = initialSetupForBranch(store, initialTurns, context.caseText);
   await saveStore(chatId, store);
   await mirrorStore(chatId, store, context);
   await publishStatus(chatId, {}, scopedUserId);
@@ -662,7 +705,7 @@ async function reconcileChat(chatId, options = {}, userId) {
 
       for (let index = startIndex; index < turns.length; index += 1) {
         const turn = turns[index];
-        const existing = options.forceLatest && index === turns.length - 1
+        const existing = options.forceLatest && index === turns.length - 1 && !importedSetupForMessage(turn.assistant)
           ? null
           : selectCheckpoint(store, turn);
         if (existing) {
@@ -694,6 +737,7 @@ async function reconcileChat(chatId, options = {}, userId) {
         previousState = result.state;
         store.lastWarning = result.warnings.join("; ").slice(0, 500);
         recordRevision(store, createdAt);
+        store.initialSetup = initialSetupForBranch(store, turns, context.caseText);
       }
 
       const liveKeys = new Set(turns.map((turn) => turn.key));
@@ -701,6 +745,7 @@ async function reconcileChat(chatId, options = {}, userId) {
         Object.entries(store.checkpoints).filter(([key]) => liveKeys.has(key)),
       );
       store.current = previousState;
+      store.initialSetup = initialSetupForBranch(store, turns, context.caseText);
     }
     store.lastError = "";
   } catch (error) {
@@ -736,6 +781,68 @@ function scheduleReconcile(chatId, options = {}, userId) {
     () => reconcileChat(chatId, options, scopedUserId),
     "Continuity queue",
   );
+}
+
+async function handleSetupAction(payload, userId) {
+  const chatId = typeof payload.chatId === "string" ? payload.chatId : "";
+  const respond = (ok, message, extra = {}) => sendFrontend({
+    type: "continuity_setup_result", requestId: payload.requestId, action: payload.type,
+    chatId, ok, message, ...extra,
+  }, userId);
+  const perform = async () => {
+    try {
+      if (!chatId || deletedChats.has(chatId)) throw new Error("Open a Date Simulator chat first.");
+      if (!spindle.permissions.has("chat_mutation")) throw new Error("Continuity Engine needs chat_mutation permission.");
+      const messages = await spindle.chat.getMessages(chatId);
+      const store = await loadStore(chatId);
+      const ready = readiness(await loadConfig()).level === "green";
+      const available = setupAvailability(messages, store, ready);
+      if (payload.type === "continuity_export_setup") {
+        const context = deriveTranscriptContext(messages);
+        const baseline = initialSetupForBranch(store, listEligibleTurns(messages, context), context.caseText);
+        if (!context.active || !baseline) throw new Error("The original opening checkpoint is unavailable. An exact initial setup cannot be exported.");
+        const result = validateSetupFile({ format: SETUP_FORMAT, version: 1, profile: context.caseText,
+          initialState: assignSetupSources(baseline.state, "initial-setup") });
+        if (!result.value) throw new Error(result.error);
+        store.initialSetup = baseline;
+        await saveStore(chatId, store);
+        respond(true, "Initial setup is ready to save.", { fileText: `${JSON.stringify(result.value, null, 2)}\n`, filename: "date-simulator-initial-setup.json" });
+      } else if (payload.type === "continuity_import_setup") {
+        if (generatingChats.has(chatId)) throw new Error("Wait for the current response to finish before importing.");
+        if (!available.canImport) throw new Error("Import requires an unused v1.5.6 startup menu and an enabled Continuity Engine with its required permissions. Open a new chat or reset this case first.");
+        if (!payload.fingerprint || payload.fingerprint !== available.fingerprint) throw new Error("The chat changed while choosing the file. Choose the file again from the current setup.");
+        const result = validateSetupFile(payload.fileText);
+        if (!result.value) throw new Error(result.error);
+        const liveMessages = await spindle.chat.getMessages(chatId);
+        if (generatingChats.has(chatId) || prefixFingerprint(liveMessages, liveMessages.length - 1) !== available.fingerprint) {
+          throw new Error("The chat changed during validation. Choose the file again after the current response finishes.");
+        }
+        await spindle.chat.appendMessage(chatId, {
+          role: "assistant", content: IMPORT_LOADED_TEXT,
+          metadata: { date_simulator_setup: result.value },
+        });
+        await reconcileChat(chatId, {}, userId);
+        respond(true, "Setup loaded. Select Begin Simulation to present the starting scene.", { status: await statusPayload(chatId) });
+      } else if (payload.type === "continuity_begin_setup") {
+        if (!available.canBegin || generatingChats.has(chatId)) throw new Error("This imported setup has already begun, a response is running, or Continuity Engine is not ready.");
+        await spindle.chat.appendMessage(chatId, { role: "user", content: BEGIN_SETUP_TEXT,
+          metadata: { date_simulator_begin: true } }, true);
+        respond(true, "The starting scene was requested. Continue in chat when the response is ready.");
+      }
+    } catch (error) {
+      respond(false, String(error?.message ?? error).slice(0, 500));
+    }
+  };
+  if (payload.type === "continuity_begin_setup") {
+    // Never hold our queue while the host starts a generation: its interceptor
+    // must be able to reconcile this chat before the request reaches the model.
+    if (beginningSetups.has(chatId)) return respond(false, "This setup is already starting.");
+    beginningSetups.add(chatId);
+    try { await scheduleReconcile(chatId, {}, userId); await perform(); }
+    finally { beginningSetups.delete(chatId); }
+  } else {
+    await scheduleChatTask(chatId, perform, "Saved setup action");
+  }
 }
 
 function normalizeForkEvent(payload) {
@@ -837,6 +944,13 @@ async function inheritForkCheckpoints(payload, userId) {
       ? checkpoint.warnings.join("; ").slice(0, 500)
       : "";
     latestCheckpoint = forkCheckpoint;
+
+    if (index === 0) {
+      const baseline = initialSetupForBranch(sourceStore, sourceTurns, sourceContext.caseText);
+      const initialState = baseline && remapTrackerStateSourceIds(baseline.state, fork.messageIdMap);
+      if (initialState) inherited.initialSetup = { ...baseline, key: forkTurn.key,
+        fingerprint: forkTurn.fingerprint, caseText: forkContext.caseText, state: initialState };
+    }
 
     if (
       sourceStore.migrationAccepted
@@ -1013,11 +1127,26 @@ for (const eventName of [
 ]) {
   spindle.on(eventName, (payload, userId) => {
     const chatId = adoptActiveChat(payload?.chatId, userId);
+    if (eventName === "MESSAGE_SENT" && payload?.message && spindle.permissions.has("chat_mutation")) {
+      // Only a real selected-branch startup command opens the drawer. Never
+      // try to launch a browser file picker from a backend message event.
+      spindle.chat.getMessages(chatId).then((messages) => {
+        if (isImportSetupSelection(messages)) sendFrontend({ type: "continuity_open_import", chatId }, userId);
+      }).catch(() => undefined);
+    }
     return scheduleReconcile(chatId, {}, userId);
   });
 }
 
 spindle.on("CHAT_FORKED", (payload, userId) => scheduleForkInheritance(payload, userId));
+
+for (const eventName of ["GENERATION_STARTED", "GENERATION_ENDED", "GENERATION_STOPPED"]) {
+  spindle.on(eventName, (payload) => {
+    if (!payload?.chatId) return;
+    if (eventName === "GENERATION_STARTED") generatingChats.add(payload.chatId);
+    else generatingChats.delete(payload.chatId);
+  });
+}
 
 spindle.on("CHAT_DELETED", (payload) => {
   const chatId = typeof payload?.id === "string" ? payload.id : "";
@@ -1048,7 +1177,9 @@ spindle.permissions.onChanged(({ permission, granted }) => {
 spindle.onFrontendMessage(async (payload, userId) => {
   frontendUserId = userId;
   const type = payload?.type;
-  if (type === "continuity_get_status") {
+  if (["continuity_import_setup", "continuity_export_setup", "continuity_begin_setup"].includes(type)) {
+    await handleSetupAction(payload, userId);
+  } else if (type === "continuity_get_status") {
     const chatId = adoptActiveChat(payload.chatId, userId);
     if (chatId) scheduleReconcile(chatId, {}, userId);
     sendFrontend(await statusPayload(chatId, { includePrivate: Boolean(payload.includePrivate) }), userId);
