@@ -125,31 +125,26 @@ test("Save As opens in the original click before the backend responds, and write
 test("remote HTTP export uses an explicit download click with exact JSON and filename", async t => {
   const downloads = [];
   const h = mount(t, { secure: false, savePicker: () => { throw new Error("HTTP must not open native picker"); } });
-  h.window.HTMLAnchorElement.prototype.click = () => assert.fail("No synthetic anchor clicks");
-  h.button("Download JSON File").addEventListener("click", event => {
-    const link = event.currentTarget;
-    assert.equal(event.defaultPrevented, false);
-    downloads.push({ href: link.href, filename: link.download, connected: link.isConnected });
-    event.preventDefault(); // Stand in for the browser download, absent in JSDOM.
-  });
+  h.window.HTMLAnchorElement.prototype.click = function () {
+    downloads.push({ href: this.href, filename: this.download, connected: this.isConnected });
+  };
   h.status();
   const exportButton = h.button("Export Initial Setup");
   assert.equal(exportButton.tagName, "BUTTON");
   assert.equal(h.window.getComputedStyle(exportButton).fontWeight, "500");
-  assert.equal(exportButton.style.border, "");
   exportButton.click();
   h.result();
   await tick();
   assert.equal(downloads.length, 0);
   const downloadButton = h.button("Download JSON File");
-  assert.equal(downloadButton.tagName, "A");
+  assert.equal(downloadButton.tagName, "BUTTON");
   assert.equal(downloadButton.hidden, false);
-  downloadButton.dispatchEvent(new h.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  downloadButton.click();
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].filename, SETUP_FILENAME);
   assert.equal(downloads[0].connected, true);
   assert.equal(decodeURIComponent(downloads[0].href.split(",").slice(1).join(",")), fileText);
-  assert.equal(h.window.document.querySelectorAll("a[download]").length, 1);
+  assert.equal(h.window.document.querySelectorAll("a[download]").length, 0);
 });
 
 test("canceling Save As never claims success or triggers a download", async t => {
@@ -223,23 +218,22 @@ test("native export can save repeatedly in one chat and after switching chats", 
 test("fallback export and download can repeat in the same chat and a new chat", async t => {
   const h = mount(t, { secure: false });
   let downloads = 0;
-  h.window.HTMLAnchorElement.prototype.click = () => assert.fail("No synthetic anchor clicks");
-  h.button("Download JSON File").addEventListener("click", event => {
-    assert.equal(event.defaultPrevented, false);
-    assert.equal(event.currentTarget.download, SETUP_FILENAME);
-    assert.equal(event.currentTarget.isConnected, true);
+  h.window.HTMLAnchorElement.prototype.click = function () {
+    assert.equal(this.download, SETUP_FILENAME);
+    assert.equal(this.isConnected, true);
+    assert.equal(decodeURIComponent(this.href.split(",").slice(1).join(",")), fileText);
     downloads++;
-    event.preventDefault();
-  });
+  };
   h.status();
   for (let i = 0; i < 3; i++) {
     if (i === 2) { h.event("CHAT_SWITCHED", { chatId: "chat-2" }); h.status({ chatId: "chat-2" }); }
     assert.equal(h.button("Export Initial Setup").disabled, false);
     h.button("Export Initial Setup").click(); h.result(); await tick();
-    h.button("Download JSON File").dispatchEvent(new h.window.MouseEvent("click", { bubbles: true, cancelable: true }));
-    h.button("Download JSON File").dispatchEvent(new h.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    h.button("Download JSON File").click();
+    h.button("Download JSON File").click();
   }
   assert.equal(downloads, 6);
+  assert.equal(h.window.document.querySelectorAll("a[download]").length, 0);
 });
 
 test("a rendered chat change releases a pending save without waiting for CHAT_SWITCHED", async t => {

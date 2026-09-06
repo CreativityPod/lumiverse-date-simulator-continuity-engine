@@ -377,11 +377,16 @@ export async function finishSetupSave(picker, fileText, isCurrent = () => true) 
   }
 }
 
-// Keep a real download hyperlink mounted so the browser handles the user's
-// original click. Do not proxy it through a synthetic click on a hidden anchor.
-export function prepareSetupDownload(anchor, fileText) {
+// A separate real click is required on hosts without the native save API.
+// A data URL avoids relying on a Blob URL created in an asynchronous callback.
+export function downloadSetupFile(fileText, ownerDocument) {
+  const anchor = ownerDocument.createElement("a");
   anchor.href = `data:application/json;charset=utf-8,${encodeURIComponent(fileText)}`;
   anchor.download = SETUP_FILENAME;
+  anchor.style.display = "none";
+  anchor.addEventListener("click", (event) => event.stopPropagation());
+  ownerDocument.body.appendChild(anchor);
+  try { anchor.click(); } finally { anchor.remove(); }
 }
 
 export function setup(ctx) {
@@ -569,19 +574,15 @@ export function setup(ctx) {
   setupFeedback.className = "dsc-hint";
   setupFeedback.setAttribute("aria-live", "polite");
   setupFeedback.textContent = "Save the private profile and original starting state as a JSON file. The file is readable outside the simulation.";
-  const setupDownload = document.createElement("a");
-  setupDownload.className = "dsc-button dsc-button-primary";
-  setupDownload.textContent = "Download JSON File";
-  setupDownload.addEventListener("click", (event) => {
-    if (!preparedSetup || preparedSetup.chatId !== activeChatId || setupDownload.hidden) {
-      event.preventDefault();
-      return;
+  const setupDownload = createButton("Download JSON File", () => {
+    if (!preparedSetup || preparedSetup.chatId !== activeChatId) return;
+    try {
+      downloadSetupFile(preparedSetup.fileText, document);
+      setupFeedback.textContent = "Download requested. Check your browser’s Downloads. A Save As window depends on your browser settings on this connection.";
+    } catch (error) {
+      setupFeedback.textContent = `Download could not start: ${String(error?.message ?? error)}`;
     }
-    // Preserve the link's default download action and repeatability. Stop host
-    // drawer link handlers from rerouting the click as in-app navigation.
-    event.stopPropagation();
-    setupFeedback.textContent = "Download requested. Check your browser’s Downloads. If no window opens, check this site’s download permissions in the address bar.";
-  });
+  }, true);
   setupDownload.hidden = true;
   setupSection.append(setupTitle, setupActions, setupFeedback, setupDownload);
   panel.append(statusRow, setupSection, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
@@ -1440,8 +1441,6 @@ export function setup(ctx) {
   function clearSetupDownload() {
     setupSaveGeneration += 1;
     preparedSetup = null;
-    setupDownload.removeAttribute("href");
-    setupDownload.removeAttribute("download");
     pendingSavePicker = null;
     setupDownload.hidden = true;
   }
@@ -1626,7 +1625,6 @@ export function setup(ctx) {
         const generation = setupSaveGeneration;
         const chatId = activeChatId;
         preparedSetup = { fileText: payload.fileText, chatId };
-        prepareSetupDownload(setupDownload, payload.fileText);
         const picker = pendingSavePicker;
         pendingSavePicker = null;
         setupBusy = true;
