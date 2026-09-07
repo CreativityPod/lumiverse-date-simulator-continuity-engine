@@ -6,8 +6,8 @@ For v1.5.5 Surprise Me setup, it also injects one deterministic branch-stable ca
 
 ## Compatibility
 
-- Intended card: `Date_Simulator_CCv3_v1.5.5.json`.
-- Matching companion regex package: `Date_Simulator_Persistent_State_v1.5.5.json`.
+- Intended card: `Date_Simulator_CCv3_v1.5.6.json`.
+- Matching companion regex package: `Date_Simulator_Persistent_State_v1.5.6.json`.
 - Do not enable the legacy v1.3.1 State Bridge on the same chat.
 - Earlier v1.4/v1.5 prompts remain recognizable for continuity tracking, but contextual numeric startup routing and structural saved-case suppression require the coordinated v1.5.5 markers.
 - v1.5.5 remains usable without this extension, but it deliberately has no inline structured scene fallback.
@@ -18,6 +18,23 @@ For v1.5.5 Surprise Me setup, it also injects one deterministic branch-stable ca
 2. Grant `generation`, `interceptor`, `chat_mutation`, and `ui_panels` permissions. The first three power continuity tracking; `ui_panels` is used only for the optional floating status widget.
 3. Open the **Continuity** drawer and optionally select a tracker connection and structured-output mode. With no selection, the active default connection and automatic provider detection are used.
 4. Import the companion matching the card version so the private-profile warning card and reset action render correctly.
+
+## Save and load an initial setup (v1.4.4)
+
+Use Date Simulator **v1.5.6**, its matching persistent-state companion, and a Lumiverse host with `ctx.uploads.pickFile` and `spindle.chat.appendMessage` with generation support. The implementation follows the local Lumiverse 1.1.6 APIs. The existing permissions are sufficient.
+
+- **Export Initial Setup** opens the native Save As picker when the browser supports it on a secure connection (HTTPS or localhost). Choose a location to write `date-simulator-initial-setup.json`.
+- On a remote HTTP connection or a browser without that API, export prepares the file and displays a **Download JSON File** control styled like Lumiverse’s primary buttons. Click it to start the download. Whether a Save As window appears then depends on browser download settings; otherwise check Downloads. You can rename and keep as many files as you like.
+- Canceling Save As writes no setup content. A save error is shown explicitly and offers the download button. Switching chats invalidates a pending export.
+- At a fresh startup menu, click **Import Saved Setup — Choose File** in the greeting or use **Import Setup — Choose File** in the drawer. Typing `5` immediately after that menu, `Import Saved Setup`, or `/import` opens the import section; click Choose File to open the native picker.
+- Select your JSON file. After **Setup loaded**, select **Begin Simulation**, or type `/begin`, to present the observable opening. Import and the opening do not run a tracker generation or advance the baseline. Normal play resumes from it.
+- A case already in progress must be reset with `/new`, or you must open a new chat, before importing. A changed chat or a response in progress rejects import rather than replacing state in the wrong context. Canceling the picker changes nothing.
+
+The file contains only the nine-field private case profile and the **frozen initial scene and arc state**, including the initial private response, plus format/version identifiers. It never includes later tracking, transcript history, checkpoints, chat IDs, or original source-message IDs. The file is plain readable JSON; ordinary roleplay and the import confirmation do not expose the private contents. Image-derived descriptions are preserved as text; original image attachments are not included.
+
+The first valid opening checkpoint is saved separately from current tracking. Exporting later still exports that original baseline, even after reprocessing. A selected opening edit or swipe invalidates the old fingerprint. Older chats can export only when a valid original opening checkpoint is available; a migrated later checkpoint is never labeled as an original setup. Exports do not make a model call to reconstruct missing initial facts.
+
+Import validates the complete file (format version 1, tracker schema v4, up to 256 KB) before writing a single setup anchor to the chat. The public anchor is a neutral confirmation; the private baseline is stored in extension message metadata. Canonical checkpoints and prompt injection are restored locally from it, including after reopening, sidecar recovery, or a chat fork. Deleting/swiping away the anchor or resetting the case deactivates it. Files are imported as recorded initial conditions, not guaranteed outcomes.
 
 ## What it tracks
 
@@ -42,6 +59,8 @@ The manual profile action is only a fallback when the extension is absent or aut
 
 The tracker starts after every eligible assistant response. Before the next roleplay generation, the prompt interceptor queues a verification pass and waits for reconciliation of the latest completed assistant turn to finish. Each provider request is bounded by the configured tracker timeout; a failed request retains the last valid state and marks the engine degraded.
 
+On hosts that provide Lumiverse's source-to-fork message map, branching inherits the complete validated checkpoint prefix through the exact fork point. Canonical provenance, checkpoint keys, fingerprints, epoch identity, and any accepted migration baseline are remapped to the copied message IDs before the branch is reconciled. Later source-chat checkpoints are never copied. A missing, stale, or partially mapped checkpoint stops inheritance at the last proven contiguous prefix, so normal reconciliation generates only the genuinely missing branch tail.
+
 Canonical storage, chat-variable mirrors, migration results, and opt-in private inspection remain complete schema-v4 JSON. Provider-facing tracker output keeps the same `scene` and `arc` paths but replaces opaque source-message identifiers with `preserve` or `update` actions. The backend assigns the current assistant source to updates and retains canonical provenance for preserved sections and exact unchanged list items. Prompt injection uses a private one-way compact projection that omits source-message identifiers, empty collections, and known unknown/default values while retaining established private-response, relationship, objective, NPC, and scene facts. Omitted prompt fields are explicitly defined as unknown or empty; stored state is not pruned or rewritten. The injected block remains visible through Lumiverse Prompt Breakdown and Dry Run.
 
 Tracker output is materialized conservatively into canonical schema v4 and then passed through the strict validator before commit. A `preserve` action copies the prior canonical singleton section; an `update` action receives the current assistant source in backend code. Exact unchanged NPCs and objectives retain their prior sources, while updated or new entries receive the current source. Invalid actions, empty relationship/response update summaries, invalid leaf fields, and malformed collections preserve their prior canonical scope. A repair call is reserved for structurally unusable output.
@@ -54,10 +73,12 @@ The Continuity drawer always shows a privacy-safe observable snapshot: current s
 
 The drawer also permits private-state inspection, reprocessing the latest turn, configuration changes, explicit v1.3.1 migration, and confirmed cleanup of unused extension-owned tracking files. The cleanup action first reports orphaned and never-used sidecars, then requires a second click and a fresh safety check before deletion. It uses Lumiverse's host-mounted selects, switches, numeric inputs, badges, and checkboxes when available. Persistent theme-matched details sections keep those mounted controls alive while collapsed. Older hosts receive one consistent theme-token HTML fallback.
 
+Returning Home hides the floating widget, clears the drawer's chat snapshot and pending setup saves, and leaves the frontend idle until a chat is opened. A tracker update already in progress can finish saving its checkpoint without restoring the old chat UI.
+
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.3.7 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.4.4 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -83,6 +104,13 @@ The drawer also permits private-state inspection, reprocessing the latest turn, 
 - Version 1.3.5 recognizes bare `1` as Surprise Me only after a branch-local marked startup menu, strips that routing marker from provider-bound assistant history, and structurally suppresses the card's marked saved-case fallback so the authoritative engine block contains the only stable-case copy.
 - Version 1.3.6 removes source-message identifiers from provider prompts and structured output, retains the existing schema-v4 scene and arc paths, uses `preserve`/`update` actions at all six provenance-bearing locations, and assigns canonical source identifiers deterministically in backend code.
 - Version 1.3.7 deletes chat sidecars after Lumiverse confirms chat deletion, prevents unrelated or inactive chats from creating new inert sidecars, and adds a two-step drawer cleanup action that safely removes orphaned and never-used tracking files while retaining malformed, changing, and historical stores.
+- Version 1.3.8 inherits the exact validated checkpoint prefix when Lumiverse forks a chat, remaps every canonical source ID and checkpoint fingerprint to the copied branch messages, and prevents a normal branch from replaying one tracker request per historical turn.
+
+- Version 1.4.3 restores the v1.4.1 Download JSON File button and its temporary-anchor click behavior at user request. It retains v1.4.2 drawer styling and chat-change cleanup.
+- Version 1.4.4 makes navigation authoritative. Returning Home hides the widget and clears chat content from the drawer; late render events, background messages, and stale status responses cannot restore the previous chat. Background reconciliation can still finish and is shown when that chat is opened again.
+- Version 1.4.2 matches Lumiverse drawer button typography, theme colors, and disabled treatment. HTTP downloads use a persistent native download link styled as a button, preserving the original user click instead of proxying through a hidden scripted link. Pending saves reset consistently on chat changes. Repeated exports/downloads are covered in frontend regressions.
+- Version 1.4.1 adds visible import/export button outlines, synchronous native Save As activation and an explicit download fallback. It repairs profile status refreshes for delayed Shadow DOM rendering and prevents background message events from changing the active export target.
+- Version 1.4.0 adds file export/import for frozen initial setups, a v1.5.6 greeting button, contextual import routing, and an observation-only imported opening. It preserves the profile and initial schema-v4 state through local metadata-backed recovery and forks.
 
 ## Development
 
@@ -91,3 +119,9 @@ npm run check
 ```
 
 This builds both entry points, runs unit tests, and validates the extension package.
+
+### Frontend regression checks
+
+`npm ci` installs the development-only DOM test dependency; the shipped extension has no runtime dependencies. `npm run check` includes full frontend tests with the release companion markup. For visual verification, serve this folder locally and open `test/browser-regressions.html`; its backend is synthetic, and the checkbox exercises the download fallback. Automated file-handle tests do not certify native browser dialogs or an installed remote Lumiverse instance.
+
+Drawer buttons follow the host FormComponents medium button: 13px times the font scale, weight 500, primary border matching the fill, and disabled opacity 0.4 with a not-allowed cursor. Keyboard focus retains a visible outline. If an HTTP download control responds but no download appears, check the site’s download permission and browser Downloads; a webpage cannot confirm completion of a native hyperlink download.

@@ -241,7 +241,7 @@ export function privateStatePresentation(visible, status, cached = null) {
   };
 }
 
-function createButton(text, action, primary = false) {
+export function createButton(text, action, primary = false) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `dsc-button${primary ? " dsc-button-primary" : ""}`;
@@ -308,6 +308,7 @@ export function cardsInside(root) {
   function visit(scope) {
     if (!scope || visited.has(scope) || typeof scope.querySelectorAll !== "function") return;
     visited.add(scope);
+    if (scope.shadowRoot) visit(scope.shadowRoot);
 
     if (isElementLike(scope)) {
       if (scope.matches(PROFILE_CARD_SELECTOR)) cards.push(scope);
@@ -334,18 +335,74 @@ export function cardsInside(root) {
   return [...new Set(cards)];
 }
 
+export async function pickSetupFile(ctx, target, getActiveChatId) {
+  if (typeof ctx.uploads?.pickFile !== "function") throw new Error("Update Lumiverse to use setup file imports.");
+  const files = await ctx.uploads.pickFile({ accept: [".json", "application/json"], multiple: false, maxSizeBytes: 256 * 1024 });
+  if (!files?.length) return null;
+  if (getActiveChatId() !== target.chatId) throw new Error("The active chat changed. Choose the file again in the intended chat.");
+  const file = files[0];
+  if (file.sizeBytes > 256 * 1024 || file.bytes?.byteLength > 256 * 1024) throw new Error("Setup file exceeds 256 KB.");
+  return new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
+}
+
+export const SETUP_FILENAME = "date-simulator-initial-setup.json";
+
+// Call before any await/backend round trip so browsers retain user activation.
+export function openSetupSavePicker(browserWindow) {
+  if (browserWindow.isSecureContext === false || typeof browserWindow.showSaveFilePicker !== "function") return null;
+  try {
+    return Promise.resolve(browserWindow.showSaveFilePicker({
+      suggestedName: SETUP_FILENAME,
+      types: [{ description: "Date Simulator setup", accept: { "application/json": [".json"] } }],
+    })).then((handle) => ({ handle }), (error) => ({ error }));
+  } catch (error) { return Promise.resolve({ error }); }
+}
+
+export async function finishSetupSave(picker, fileText, isCurrent = () => true) {
+  const result = await picker;
+  if (!isCurrent()) return "stale";
+  if (!result) return "download";
+  if (result.error?.name === "AbortError") return "canceled";
+  if (result.error) return "download";
+  const writable = await result.handle.createWritable();
+  try {
+    if (!isCurrent()) { await writable.abort?.(); return "stale"; }
+    await writable.write(fileText);
+    if (!isCurrent()) { await writable.abort?.(); return "stale"; }
+    await writable.close();
+    return "saved";
+  } catch (error) {
+    try { await writable.abort?.(); } catch { /* retain the original write error */ }
+    throw error;
+  }
+}
+
+// A separate real click is required on hosts without the native save API.
+// A data URL avoids relying on a Blob URL created in an asynchronous callback.
+export function downloadSetupFile(fileText, ownerDocument) {
+  const anchor = ownerDocument.createElement("a");
+  anchor.href = `data:application/json;charset=utf-8,${encodeURIComponent(fileText)}`;
+  anchor.download = SETUP_FILENAME;
+  anchor.style.display = "none";
+  anchor.addEventListener("click", (event) => event.stopPropagation());
+  ownerDocument.body.appendChild(anchor);
+  try { anchor.click(); } finally { anchor.remove(); }
+}
+
 export function setup(ctx) {
   ctx.deferReady();
   const cleanups = [];
   const mountedComponents = [];
   let latestStatus = null;
   let latestConnections = [];
-  let activeChatId = null;
+  // undefined means startup selection is not known yet; null means Home.
+  let activeChatId;
   let connectionDiagnostic = "Loading connection profiles…";
   let connectionPermissionGranted = null;
   let showPrivateState = false;
   let privateStateCache = null;
   let cardSyncQueued = false;
+  let disposed = false;
   let statusWidget = null;
   let statusWidgetButton = null;
   let statusWidgetInteractionCleanup = null;
@@ -356,8 +413,20 @@ export function setup(ctx) {
   const statusWidgetRevisionByChat = new Map();
   const cardWatchdogs = new WeakMap();
   const watchdogTimers = new Set();
+  let setupBusy = false;
+  let setupRequest = null;
+  let setupRequestSequence = 0;
+  let preparedSetup = null;
+  let pendingSavePicker = null;
+  let setupSaveGeneration = 0;
+  const profileStatusByMessage = new Map();
+  let generationBusy = false;
 
   const removeStyle = ctx.dom.addStyle(`
+    .ds-import-setup { appearance: none !important; display: inline-flex !important; align-items: center; min-height: 40px; padding: 10px 16px !important; border: 2px solid #b29bd8 !important; border-radius: 9px !important; background: #392b50 !important; color: #fff !important; font-weight: 700 !important; line-height: 1.3; cursor: pointer !important; box-shadow: inset 0 1px 0 rgba(255,255,255,.16); }
+    .ds-import-setup:hover { background: #503d70 !important; }
+    .ds-import-setup:focus-visible { outline: 3px solid #c7b1ed; outline-offset: 3px; }
+    .dsc-panel [hidden] { display: none !important; }
     .dsc-panel { color: var(--lumiverse-text); display: flex; flex-direction: column; gap: 16px; }
     .dsc-status-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 2px 0 12px; border-bottom: 1px solid var(--lumiverse-border); }
     .dsc-status-copy { min-width: 0; display: grid; gap: 4px; }
@@ -376,14 +445,14 @@ export function setup(ctx) {
     .dsc-control-slot { min-width: 0; }
     .dsc-actions-section { display: grid; gap: 8px; padding-top: 2px; }
     .dsc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    .dsc-button { appearance: none; display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 8px 14px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted); font: inherit; font-size: .78rem; font-weight: 500; line-height: 1; cursor: pointer; transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
+    .dsc-button { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px; border: 1px solid var(--lumiverse-border, rgba(147,112,219,.12)); border-radius: var(--lumiverse-radius, 8px); background: transparent; color: var(--lumiverse-text-muted, #ada7bc); font-family: inherit; font-size: calc(13px * var(--lumiverse-font-scale, 1)); font-weight: 500; cursor: pointer; white-space: nowrap; text-decoration: none; transition: background var(--lumiverse-transition-fast, .15s), color var(--lumiverse-transition-fast, .15s), border-color var(--lumiverse-transition-fast, .15s); }
     .dsc-button:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); }
-    .dsc-button:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 2px; }
-    .dsc-button-primary { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); }
-    .dsc-button-primary:hover:not(:disabled) { border-color: var(--lumiverse-primary, var(--lumiverse-accent)); background: var(--lumiverse-primary, var(--lumiverse-accent)); color: var(--lumiverse-accent-fg, #fff); filter: brightness(1.06); }
-    .dsc-button-danger { border-color: var(--lumiverse-warning, #c89b62); color: var(--lumiverse-warning, #c89b62); }
-    .dsc-button-danger:hover:not(:disabled) { border-color: var(--lumiverse-warning, #c89b62); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-warning, #c89b62); }
-    .dsc-button:disabled { opacity: .5; cursor: wait; }
+    .dsc-button:focus-visible { outline: 2px solid var(--lumiverse-primary, #9370db); outline-offset: 2px; }
+    .dsc-button-primary { border-color: var(--lumiverse-primary, #9370db); background: var(--lumiverse-primary, #9370db); color: var(--lumiverse-primary-contrast, #fff); }
+    .dsc-button-primary:hover:not(:disabled) { background: var(--lumiverse-primary-hover, #a080e0); color: var(--lumiverse-primary-contrast, #fff); }
+    .dsc-button-danger { border-color: var(--lumiverse-danger, #ef4444); color: var(--lumiverse-danger, #ef4444); }
+    .dsc-button-danger:hover:not(:disabled) { background: var(--lumiverse-fill-subtle); color: var(--lumiverse-danger, #ef4444); }
+    .dsc-button:disabled { opacity: .4; cursor: not-allowed; }
     .dsc-fallback-control { box-sizing: border-box; width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--lumiverse-border); border-radius: var(--lumiverse-radius, 8px); background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); font: inherit; font-size: .78rem; }
     .dsc-fallback-control:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 1px; }
     .dsc-fallback-check { display: flex; align-items: flex-start; gap: 8px; color: var(--lumiverse-text-muted); font-size: .78rem; }
@@ -495,7 +564,29 @@ export function setup(ctx) {
   actionStatus.textContent = "Reprocess and migration progress will appear here.";
   actionsSection.append(actions, actionStatus);
 
-  panel.append(statusRow, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
+  const setupSection = document.createElement("section");
+  setupSection.className = "dsc-section";
+  const setupTitle = document.createElement("div");
+  setupTitle.className = "dsc-section-title";
+  setupTitle.textContent = "Saved setup";
+  const setupActions = document.createElement("div");
+  setupActions.className = "dsc-actions";
+  const setupFeedback = document.createElement("div");
+  setupFeedback.className = "dsc-hint";
+  setupFeedback.setAttribute("aria-live", "polite");
+  setupFeedback.textContent = "Save the private profile and original starting state as a JSON file. The file is readable outside the simulation.";
+  const setupDownload = createButton("Download JSON File", () => {
+    if (!preparedSetup || preparedSetup.chatId !== activeChatId) return;
+    try {
+      downloadSetupFile(preparedSetup.fileText, document);
+      setupFeedback.textContent = "Download requested. Check your browser’s Downloads. A Save As window depends on your browser settings on this connection.";
+    } catch (error) {
+      setupFeedback.textContent = `Download could not start: ${String(error?.message ?? error)}`;
+    }
+  }, true);
+  setupDownload.hidden = true;
+  setupSection.append(setupTitle, setupActions, setupFeedback, setupDownload);
+  panel.append(statusRow, setupSection, settingsSection, advancedHost, snapshotSection, actionsSection, privateHost);
   tab.root.appendChild(panel);
 
   const stateText = document.createElement("pre");
@@ -834,7 +925,7 @@ export function setup(ctx) {
   function requestStatus() {
     ctx.sendToBackend({
       type: "continuity_get_status",
-      chatId: activeChatId,
+      ...(activeChatId === undefined ? {} : { chatId: activeChatId }),
       includePrivate: showPrivateState,
     });
   }
@@ -1007,12 +1098,13 @@ export function setup(ctx) {
     return [...cards];
   }
 
-  function profileCardsForStatus(status) {
+  function profileCardsForStatus(status, exactOnly = false) {
     if (!status?.caseMessageId) return [];
     const bubble = ctx.dom.findMessageElement(status.caseMessageId);
     const exact = cardsInside(bubble);
     if (exact.length > 0) return exact;
 
+    if (exactOnly || status.chatId !== activeChatId) return [];
     const fallback = mountedProfileCards();
     return fallback.length > 0 ? [fallback.at(-1)] : [];
   }
@@ -1058,7 +1150,7 @@ export function setup(ctx) {
   }
 
   function armCardWatchdog(card) {
-    if (!isElementLike(card) || cardWatchdogs.has(card)) return;
+    if (!isElementLike(card) || cardWatchdogs.has(card) || ["saved", "saving", "fallback", "invalid"].includes(card.dataset.engineState)) return;
     if (!card.dataset.engineState) card.dataset.engineState = "checking";
     applyProfileCardChrome(card, { manual: false, level: "green" });
     const timer = setTimeout(() => {
@@ -1087,10 +1179,10 @@ export function setup(ctx) {
     watchdogTimers.add(timer);
   }
 
-  function updateProfileCards(status) {
+  function updateProfileCards(status, exactOnly = false) {
     if (!status?.caseMessageId) return;
     const presentation = profileCardPresentation(status);
-    for (const card of profileCardsForStatus(status)) {
+    for (const card of profileCardsForStatus(status, exactOnly)) {
       clearCardWatchdog(card);
       card.dataset.engineState = presentation.state;
       card.dataset.engineManual = presentation.manual ? "true" : "false";
@@ -1114,10 +1206,14 @@ export function setup(ctx) {
   }
 
   function scheduleProfileCardSync() {
-    if (cardSyncQueued) return;
+    if (disposed || cardSyncQueued) return;
     cardSyncQueued = true;
     queueMicrotask(() => {
       cardSyncQueued = false;
+      if (disposed) return;
+      refreshProfileObservers();
+      for (const card of mountedProfileCards()) armCardWatchdog(card);
+      for (const status of profileStatusByMessage.values()) updateProfileCards(status, true);
       if (latestStatus) updateProfileCards(latestStatus);
     });
   }
@@ -1294,6 +1390,18 @@ export function setup(ctx) {
   }
 
   function renderStatus(status) {
+    const statusChatId = typeof status?.chatId === "string" && status.chatId ? status.chatId : null;
+    // Status describes a chat; it never changes the current route. During
+    // bootstrap only, the backend may supply the host's already-selected chat.
+    if (activeChatId !== undefined && statusChatId !== activeChatId) return;
+    if (activeChatId === undefined) activeChatId = statusChatId;
+    if (status.caseMessageId) {
+      const { chatId, caseMessageId, profileSaved, code, text, level } = status;
+      profileStatusByMessage.set(caseMessageId, { chatId, caseMessageId, profileSaved, code, text, level });
+      if (profileStatusByMessage.size > 32) profileStatusByMessage.delete(profileStatusByMessage.keys().next().value);
+      updateProfileCards(status, true);
+      scheduleProfileCardSync();
+    }
     const resolvedWidgetPreference = resolveStatusWidgetPreference(
       status,
       pendingStatusWidgetPreference,
@@ -1301,15 +1409,14 @@ export function setup(ctx) {
     status = resolvedWidgetPreference.status;
     pendingStatusWidgetPreference = resolvedWidgetPreference.pendingPreference;
     latestStatus = status;
-    if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
-    statusText.textContent = status.text;
+    statusText.textContent = statusChatId ? status.text : "No active chat.";
     const localRevisionAt = formatLocalTimestamp(status.lastRevisionAt);
     statusMeta.textContent = status.chatId
       ? `Revision ${status.revision || 0}${localRevisionAt ? ` · Last revised ${localRevisionAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
       : "No active chat.";
     statusMeta.title = status.lastRevisionAt || "";
-    const badgeText = status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
-    const badgeColor = status.processing ? "info" : status.level === "green" ? "success" : "warning";
+    const badgeText = !statusChatId ? "Idle" : status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
+    const badgeColor = !statusChatId || status.processing ? "info" : status.level === "green" ? "success" : "warning";
     badgeControl.update({ text: badgeText, color: badgeColor });
     controls.enabled.set(status.config?.enabled !== false);
     controls.showStatusWidget.set(status.config?.showStatusWidget !== false);
@@ -1322,7 +1429,85 @@ export function setup(ctx) {
     tab.setBadge(status.level === "green" ? null : "!");
     updateProfileCards(status);
     syncStatusWidget(status);
+    renderSetupControls();
   }
+
+  function renderSetupControls() {
+    const available = latestStatus?.setup ?? {};
+    importSetupButton.disabled = setupBusy || generationBusy || !available.canImport;
+    exportSetupButton.disabled = setupBusy || !available.canExport;
+    beginSetupButton.disabled = setupBusy || generationBusy || !available.canBegin;
+    beginSetupButton.hidden = !available.canBegin;
+    importSetupButton.title = available.canImport ? "Choose a saved setup JSON file" : "Open a v1.5.6 startup menu to import a setup";
+    exportSetupButton.title = available.canExport ? "Save the frozen opening baseline" : "The original opening checkpoint is not available yet";
+  }
+
+  function clearSetupDownload() {
+    setupSaveGeneration += 1;
+    preparedSetup = null;
+    pendingSavePicker = null;
+    setupDownload.hidden = true;
+  }
+  cleanups.push(clearSetupDownload);
+
+  function sendSetupRequest(type, extra = {}) {
+    setupBusy = true;
+    setupRequest = { id: `setup-${++setupRequestSequence}`, chatId: activeChatId };
+    renderSetupControls();
+    ctx.sendToBackend({ type, chatId: activeChatId, requestId: setupRequest.id, ...extra });
+  }
+
+  async function chooseSetupFile() {
+    tab.activate();
+    if (setupBusy || generationBusy) return;
+    if (!latestStatus?.setup?.canImport || latestStatus.chatId !== activeChatId) {
+      setupFeedback.textContent = "Open a new v1.5.6 chat or reset the active case before importing. If the menu is already open, wait for engine status and try again.";
+      requestStatus();
+      return;
+    }
+    const target = { chatId: activeChatId, fingerprint: latestStatus.setup.fingerprint };
+    setupBusy = true;
+    renderSetupControls();
+    try {
+      const fileText = await pickSetupFile(ctx, target, () => activeChatId);
+      if (fileText === null) {
+        if (activeChatId === target.chatId) setupFeedback.textContent = "File selection canceled. Setup unchanged.";
+        return;
+      }
+      setupFeedback.textContent = "Validating saved setup…";
+      sendSetupRequest("continuity_import_setup", { fileText, fingerprint: target.fingerprint });
+    } catch (error) {
+      if (activeChatId === target.chatId) setupFeedback.textContent = String(error?.message ?? error);
+    } finally {
+      if (!setupRequest) setupBusy = false;
+      renderSetupControls();
+    }
+  }
+
+  const importSetupButton = createButton("Import Setup — Choose File", chooseSetupFile, true);
+  const exportSetupButton = createButton("Export Initial Setup", () => {
+    clearSetupDownload();
+    pendingSavePicker = openSetupSavePicker(window);
+    setupFeedback.textContent = pendingSavePicker ? "Choose where to save the setup…" : "Preparing the original starting setup…";
+    sendSetupRequest("continuity_export_setup");
+  }, true);
+  const beginSetupButton = createButton("Begin Simulation", () => {
+    setupFeedback.textContent = "Starting the imported simulation…";
+    sendSetupRequest("continuity_begin_setup");
+  }, true);
+  setupActions.append(importSetupButton, exportSetupButton, beginSetupButton);
+  renderSetupControls();
+
+  // Delegation survives delayed greeting rendering and composed Shadow DOM
+  // clicks. The picker is called within the original user click handler.
+  const onSetupClick = (event) => {
+    const button = (event.composedPath?.() ?? [event.target]).find((element) => element?.matches?.("button.ds-import-setup"));
+    if (!button) return;
+    event.preventDefault();
+    chooseSetupFile();
+  };
+  document.addEventListener("click", onSetupClick);
+  cleanups.push(() => document.removeEventListener("click", onSetupClick));
 
   const saveButton = createButton("Save Settings", () => {
     ctx.sendToBackend({
@@ -1382,20 +1567,42 @@ export function setup(ctx) {
   });
   actions.append(saveButton, refreshButton, reprocessButton, migrateButton, cleanupButton);
 
-  if (typeof MutationObserver === "function" && document.body) {
-    const observer = new MutationObserver((records) => {
-      for (const record of records) {
-        const cards = [...record.addedNodes].flatMap(cardsInside);
-        if (cards.length > 0) {
-          for (const card of cards) armCardWatchdog(card);
-          scheduleProfileCardSync();
-          break;
-        }
+  const profileObservers = new Map();
+  function refreshProfileObservers() {
+    if (typeof MutationObserver !== "function" || !document.body) return;
+    const roots = [document.body];
+    const visit = (scope) => {
+      if (scope.shadowRoot) { roots.push(scope.shadowRoot); visit(scope.shadowRoot); }
+      for (const element of scope.querySelectorAll?.("*") ?? []) {
+        if (element.shadowRoot) { roots.push(element.shadowRoot); visit(element.shadowRoot); }
       }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    cleanups.push(() => observer.disconnect());
+    };
+    visit(document.body);
+    for (const [root, observer] of profileObservers) {
+      if (root.host && !root.host.isConnected) { observer.disconnect(); profileObservers.delete(root); }
+    }
+    for (const root of roots) {
+      if (profileObservers.has(root)) continue;
+      const observer = new MutationObserver((records) => {
+        if (records.some((record) => [...record.addedNodes].some((node) => node.nodeType === 1))) scheduleProfileCardSync();
+      });
+      observer.observe(root, { childList: true, subtree: true });
+      profileObservers.set(root, observer);
+    }
   }
+  refreshProfileObservers();
+  cleanups.push(() => { for (const observer of profileObservers.values()) observer.disconnect(); });
+  const delayedProfileScans = new Set();
+  function rescanDelayedProfiles() {
+    for (const timer of delayedProfileScans) clearTimeout(timer);
+    delayedProfileScans.clear();
+    for (const delay of [100, 500, 1500, 3000]) {
+      const timer = setTimeout(() => { delayedProfileScans.delete(timer); scheduleProfileCardSync(); }, delay);
+      delayedProfileScans.add(timer);
+    }
+  }
+  cleanups.push(() => { for (const timer of delayedProfileScans) clearTimeout(timer); });
+  rescanDelayedProfiles();
   for (const card of mountedProfileCards()) armCardWatchdog(card);
   cleanups.push(() => {
     for (const timer of watchdogTimers) clearTimeout(timer);
@@ -1409,6 +1616,45 @@ export function setup(ctx) {
   }));
 
   cleanups.push(ctx.onBackendMessage((payload) => {
+    if (payload?.type === "continuity_open_import" && payload.chatId === activeChatId) {
+      tab.activate();
+      setupFeedback.textContent = "Select Choose File to load your saved setup.";
+      requestStatus();
+    }
+    if (payload?.type === "continuity_setup_result" && payload.requestId === setupRequest?.id && payload.chatId === activeChatId) {
+      setupRequest = null;
+      setupBusy = false;
+      setupFeedback.textContent = payload.message;
+      if (payload.ok && typeof payload.fileText === "string") {
+        const generation = setupSaveGeneration;
+        const chatId = activeChatId;
+        preparedSetup = { fileText: payload.fileText, chatId };
+        const picker = pendingSavePicker;
+        pendingSavePicker = null;
+        setupBusy = true;
+        finishSetupSave(picker, payload.fileText, () => generation === setupSaveGeneration && chatId === activeChatId)
+          .then((outcome) => {
+            if (generation !== setupSaveGeneration || chatId !== activeChatId) return;
+            setupDownload.hidden = outcome === "canceled" || outcome === "stale";
+            setupFeedback.textContent = outcome === "saved" ? "Initial setup saved to the selected JSON file."
+              : outcome === "canceled" ? "Save canceled. No file was written."
+              : "Setup ready. Select Download JSON File. This browser/connection does not provide a native Save As window; browser download settings apply.";
+          })
+          .catch((error) => {
+            if (generation !== setupSaveGeneration || chatId !== activeChatId) return;
+            setupDownload.hidden = false;
+            setupFeedback.textContent = `Could not save the file: ${String(error?.message ?? error)}. You can retry with Download JSON File.`;
+          })
+          .finally(() => {
+            if (generation !== setupSaveGeneration || chatId !== activeChatId) return;
+            setupBusy = false;
+            renderSetupControls();
+          });
+      }
+      if (payload.status) renderStatus(payload.status);
+      renderSetupControls();
+      requestStatus();
+    }
     if (payload?.type === "continuity_status") renderStatus(payload);
     if (payload?.type === "continuity_connections") {
       latestConnections = Array.isArray(payload.connections) ? payload.connections : [];
@@ -1443,19 +1689,45 @@ export function setup(ctx) {
     }
   }));
 
-  cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
-    activeChatId = typeof payload?.chatId === "string" ? payload.chatId : null;
+  function changeActiveChat(chatId) {
+    if (chatId === activeChatId) return;
+    activeChatId = chatId;
     latestStatus = null;
     privateStateCache = null;
+    setupRequest = null;
+    setupBusy = false;
+    generationBusy = false;
+    clearSetupDownload();
+    setupFeedback.textContent = "Import a saved setup at startup, or export the original starting state of this case.";
+    renderSetupControls();
     clearStatusWidgetTimers();
     applyStatusWidgetPresentation(statusWidgetPresentation(null));
+    statusText.textContent = chatId ? "Loading chat status…" : "No active chat.";
+    statusMeta.textContent = chatId ? "" : "No active chat.";
+    statusMeta.title = "";
+    badgeControl.update({ text: chatId ? "Loading" : "Idle", color: "info" });
+    tab.setBadge(null);
+    renderPublicState(null);
     renderPrivateState(null);
     for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
+  }
+  cleanups.push(ctx.events.on("CHAT_SWITCHED", (payload) => {
+    changeActiveChat(typeof payload?.chatId === "string" ? payload.chatId : null);
   }));
+  for (const eventName of ["GENERATION_STARTED", "GENERATION_ENDED", "GENERATION_STOPPED"]) {
+    cleanups.push(ctx.events.on(eventName, (payload) => {
+      if (payload?.chatId !== activeChatId) return;
+      generationBusy = eventName === "GENERATION_STARTED";
+      renderSetupControls();
+    }));
+  }
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
-      if (typeof payload?.chatId === "string" && payload.chatId) activeChatId = payload.chatId;
+      // Render and message events can arrive after navigation. They may refresh
+      // the selected chat, but they must never select or resurrect one.
+      if (!activeChatId || payload?.chatId !== activeChatId) return;
+      rescanDelayedProfiles();
       for (const card of mountedProfileCards()) armCardWatchdog(card);
       requestStatus();
       scheduleProfileCardSync();
@@ -1463,10 +1735,22 @@ export function setup(ctx) {
   }
 
   ctx.ready();
-  requestStatus();
+  // Match Shutter's safe bootstrap without subscribing to host state during
+  // setup. Older Lumiverse builds fall back to the backend's selected chat.
+  if (typeof ctx.getActiveChat === "function") {
+    try {
+      const active = ctx.getActiveChat();
+      changeActiveChat(typeof active?.chatId === "string" && active.chatId ? active.chatId : null);
+    } catch {
+      requestStatus();
+    }
+  } else {
+    requestStatus();
+  }
   ctx.sendToBackend({ type: "continuity_get_connections" });
 
   return () => {
+    disposed = true;
     destroyStatusWidget();
     for (const handle of mountedComponents.reverse()) {
       try { handle.destroy(); } catch { /* best-effort cleanup */ }

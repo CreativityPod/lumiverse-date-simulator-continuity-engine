@@ -71,6 +71,8 @@ check(frontend.includes("Show Widget"), "Frontend exposes the floating-widget pr
 check(frontend.includes("continuity_set_widget_visibility"), "Frontend persists widget visibility immediately");
 check(backend.includes("showStatusWidget"), "Backend persists the floating-widget preference");
 check(backend.includes('spindle.on("CHAT_DELETED"'), "Backend cleans sidecars after confirmed chat deletion");
+check(backend.includes('spindle.on("CHAT_FORKED"'), "Backend inherits branch checkpoints from confirmed chat forks");
+check(backend.includes("remapTrackerStateSourceIds"), "Backend remaps canonical branch provenance");
 check(backend.includes("scanUnusedStores"), "Backend contains conservative unused-store scanning");
 check(frontend.includes("Clean Unused Tracking Files"), "Frontend exposes confirmed tracking-file cleanup");
 check(frontend.includes("continuity_cleanup_unused"), "Frontend confirms cleanup through the backend");
