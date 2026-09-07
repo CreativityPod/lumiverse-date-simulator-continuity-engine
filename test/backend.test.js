@@ -18,6 +18,77 @@ CURRENT CONTEXT: At a cafe; sober.
 BOUNDARIES: No assumed touch.
 INITIAL STATE: Neutral curiosity.`;
 
+test("Home is explicit, background messages cannot select chats, and late status reads are discarded", async t => {
+  const events = new Map();
+  const sent = [];
+  const reads = [];
+  let receive;
+  let blockedRead;
+  const previous = globalThis.spindle;
+  t.after(() => { globalThis.spindle = previous; });
+  globalThis.spindle = {
+    permissions: { has: () => false, onChanged: () => () => {} },
+    storage: { getJson: async (path, options) => {
+      reads.push(path);
+      if (blockedRead && path === "chats/chat-a.json") {
+        const pending = blockedRead;
+        blockedRead = null;
+        pending.started();
+        await pending.wait;
+      }
+      return structuredClone(options?.fallback);
+    } },
+    on: (name, handler) => { events.set(name, handler); return () => {}; },
+    onFrontendMessage: handler => { receive = handler; return () => {}; },
+    sendToFrontend: (payload, userId) => sent.push({ payload, userId }),
+    log: { info() {}, warn() {}, error() {} },
+  };
+  await import(`../src/backend.js?home-lifecycle=${Date.now()}`);
+  const status = async (userId, fields = {}) => {
+    await receive({ type: "continuity_get_status", ...fields }, userId);
+    return sent.findLast(entry => entry.userId === userId).payload;
+  };
+
+  // Bootstrap may query the host-selected chat before CHAT_SWITCHED is replayed.
+  assert.equal((await status("user-1", { chatId: "chat-a" })).chatId, "chat-a");
+  await events.get("CHAT_SWITCHED")({ chatId: "chat-a" }, "user-1");
+  assert.equal((await status("user-1")).chatId, "chat-a");
+  const count = reads.filter(path => path.startsWith("chats/")).length;
+
+  // An explicit Home request cannot fall back to the previous chat, even if
+  // it reaches the worker before CHAT_SWITCHED.
+  assert.equal((await status("user-1", { chatId: null })).chatId, null);
+  assert.equal(reads.filter(path => path.startsWith("chats/")).length, count);
+
+  let release;
+  let started;
+  const startedPromise = new Promise(resolve => { started = resolve; });
+  blockedRead = { started, wait: new Promise(resolve => { release = resolve; }) };
+  const pending = receive({ type: "continuity_get_status", chatId: "chat-a" }, "user-1");
+  await startedPromise;
+  await events.get("CHAT_SWITCHED")({ chatId: null }, "user-1");
+  const afterHome = sent.length;
+  release();
+  await pending;
+  assert.equal(sent.length, afterHome, "old status must not publish after its asynchronous read finishes");
+
+  await events.get("MESSAGE_SENT")({ chatId: "chat-a", message: {} }, "user-1");
+  assert.equal((await status("user-1")).chatId, null);
+  const homeReadCount = reads.filter(path => path.startsWith("chats/")).length;
+  assert.equal((await status("user-1", { chatId: "chat-a" })).chatId, null);
+  assert.equal(reads.filter(path => path.startsWith("chats/")).length, homeReadCount);
+  await receive({ type: "continuity_reprocess", chatId: "chat-a" }, "user-1");
+  assert.equal(sent.at(-1).payload.ok, false);
+
+  await events.get("CHAT_SWITCHED")({ chatId: "chat-b" }, "user-1");
+  await events.get("MESSAGE_EDITED")({ chatId: "chat-a" }, "user-1");
+  assert.equal((await status("user-1")).chatId, "chat-b");
+  await events.get("CHAT_SWITCHED")({ chatId: "chat-c" }, "user-2");
+  await events.get("CHAT_SWITCHED")({ chatId: null }, "user-1");
+  assert.equal((await status("user-1")).chatId, null);
+  assert.equal((await status("user-2")).chatId, "chat-c");
+});
+
 test("inherits the exact fork-point checkpoints with remapped provenance and no replay generations", async () => {
   const events = new Map();
   const files = new Map();
@@ -465,9 +536,10 @@ test("background reconciliation saves state and the interceptor injects one bran
   delete globalThis.spindle;
 });
 
-test("saves the private profile before tracker completion and blocks the next prompt on its checkpoint", async () => {
+test("tracking finishes on Home without publishing the completed chat into the UI", async () => {
   const events = new Map();
   const files = new Map();
+  const frontendMessages = [];
   const variables = new Map();
   const messages = [
     { id: "u0", role: "user", content: "Surprise me" },
@@ -530,7 +602,7 @@ test("saves the private profile before tracker completion and blocks the next pr
     registerInterceptor: (handler) => { interceptor = handler; },
     on: (name, handler) => { events.set(name, handler); return () => events.delete(name); },
     onFrontendMessage: () => () => undefined,
-    sendToFrontend: () => undefined,
+    sendToFrontend: payload => frontendMessages.push(payload),
     log: { info: () => undefined, warn: () => undefined, error: () => undefined },
   };
 
@@ -557,10 +629,13 @@ test("saves the private profile before tracker completion and blocks the next pr
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(promptFinished, false);
 
+  await events.get("CHAT_SWITCHED")({ chatId: null }, "user-1");
+  frontendMessages.length = 0;
   releaseGeneration();
   await tracking;
   const result = await intercepted;
   assert.equal(promptFinished, true);
+  assert.equal(frontendMessages.length, 0, "checkpoint completion must not reactivate the UI");
   assert.equal(files.get("chats/chat-barrier.json").revision, 1);
   assert.ok(files.get("chats/chat-barrier.json").lastRevisionAt);
   assert.match(result.messages.map((message) => String(message.content)).join("\n"), /CURRENT SCENE/);

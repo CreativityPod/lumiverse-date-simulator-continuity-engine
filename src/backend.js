@@ -57,7 +57,7 @@ const pendingCleanupByUser = new Map();
 const beginningSetups = new Set();
 const generatingChats = new Set();
 let interceptorRegistered = false;
-let activeChatId = null;
+let activeChatId;
 let frontendUserId = undefined;
 
 const CLEANUP_CONFIRMATION_TTL_MS = 2 * 60 * 1000;
@@ -66,17 +66,35 @@ function validUserId(userId) {
   return typeof userId === "string" && Boolean(userId.trim());
 }
 
+function selectedChat(userId) {
+  return validUserId(userId) ? activeChatByUser.get(userId) : activeChatId;
+}
+
 function adoptActiveChat(chatId, userId) {
-  if (typeof chatId === "string" && chatId.trim()) {
-    activeChatId = chatId;
-    if (validUserId(userId)) {
-      frontendUserId = userId;
-      userByChat.set(chatId, userId);
-      activeChatByUser.set(userId, chatId);
-    }
+  const next = typeof chatId === "string" && chatId.trim() ? chatId : null;
+  if (validUserId(userId)) {
+    const previous = activeChatByUser.get(userId);
+    frontendUserId = userId;
+    activeChatByUser.set(userId, next);
+    if (next) userByChat.set(next, userId);
+    if (next || activeChatId === previous) activeChatId = next;
+  } else {
+    activeChatId = next;
   }
-  if (validUserId(userId)) return activeChatByUser.get(userId) ?? null;
-  return activeChatId;
+  return next;
+}
+
+function chatForRequest(payload, userId) {
+  const hasChatId = Object.prototype.hasOwnProperty.call(payload ?? {}, "chatId");
+  if (!hasChatId) return selectedChat(userId) ?? null;
+  if (payload.chatId === null) return null;
+  if (typeof payload.chatId !== "string" || !payload.chatId.trim()) return null;
+
+  const requested = payload.chatId;
+  const selected = selectedChat(userId);
+  // A host-derived bootstrap request may arrive before CHAT_SWITCHED is replayed.
+  if (selected === undefined) return adoptActiveChat(requested, userId);
+  return selected === requested ? requested : null;
 }
 
 function userForChat(chatId, userId) {
@@ -257,7 +275,7 @@ async function scanUnusedStores() {
 function forgetChat(chatId) {
   userByChat.delete(chatId);
   for (const [userId, mappedChatId] of activeChatByUser.entries()) {
-    if (mappedChatId === chatId) activeChatByUser.delete(userId);
+    if (mappedChatId === chatId) activeChatByUser.set(userId, null);
   }
   if (activeChatId === chatId) activeChatId = null;
 }
@@ -512,7 +530,12 @@ function setupAvailability(messages, store, ready = true) {
 }
 
 async function publishStatus(chatId, options = {}, userId) {
-  sendFrontend(await statusPayload(chatId, options), userForChat(chatId, userId));
+  const scopedUserId = userForChat(chatId, userId);
+  const status = await statusPayload(chatId, options);
+  // Navigation can change while statusPayload performs asynchronous reads.
+  const selected = selectedChat(scopedUserId);
+  if (chatId && selected !== undefined && selected !== chatId) return;
+  sendFrontend(status, scopedUserId);
 }
 
 async function selectedBranchStillMatches(chatId, turn) {
@@ -792,6 +815,7 @@ async function handleSetupAction(payload, userId) {
   const perform = async () => {
     try {
       if (!chatId || deletedChats.has(chatId)) throw new Error("Open a Date Simulator chat first.");
+      if (chatForRequest(payload, userId) !== chatId) throw new Error("The active chat changed. Open the intended chat and try again.");
       if (!spindle.permissions.has("chat_mutation")) throw new Error("Continuity Engine needs chat_mutation permission.");
       const messages = await spindle.chat.getMessages(chatId);
       const store = await loadStore(chatId);
@@ -833,6 +857,9 @@ async function handleSetupAction(payload, userId) {
       respond(false, String(error?.message ?? error).slice(0, 500));
     }
   };
+  if (chatForRequest(payload, userId) !== chatId) {
+    return respond(false, "The active chat changed. Open the intended chat and try again.");
+  }
   if (payload.type === "continuity_begin_setup") {
     // Never hold our queue while the host starts a generation: its interceptor
     // must be able to reconcile this chat before the request reaches the model.
@@ -1126,7 +1153,9 @@ for (const eventName of [
   "SWIPE_EDITED",
 ]) {
   spindle.on(eventName, (payload, userId) => {
-    const chatId = adoptActiveChat(payload?.chatId, userId);
+    const chatId = typeof payload?.chatId === "string" && payload.chatId ? payload.chatId : null;
+    if (!chatId) return;
+    userForChat(chatId, userId);
     if (eventName === "MESSAGE_SENT" && payload?.message && spindle.permissions.has("chat_mutation")) {
       // Only a real selected-branch startup command opens the drawer. Never
       // try to launch a browser file picker from a backend message event.
@@ -1154,19 +1183,8 @@ spindle.on("CHAT_DELETED", (payload) => {
 });
 
 spindle.on("CHAT_SWITCHED", (payload, userId) => {
-  if (typeof payload?.chatId === "string" && payload.chatId) {
-    const chatId = adoptActiveChat(payload.chatId, userId);
-    scheduleReconcile(chatId, {}, userId);
-    return;
-  }
-  if (validUserId(userId)) {
-    const previousChatId = activeChatByUser.get(userId);
-    activeChatByUser.delete(userId);
-    if (activeChatId === previousChatId) activeChatId = null;
-  } else {
-    activeChatId = null;
-  }
-  publishStatus(null, {}, userId);
+  const chatId = adoptActiveChat(payload?.chatId, userId);
+  return chatId ? scheduleReconcile(chatId, {}, userId) : publishStatus(null, {}, userId);
 });
 
 spindle.permissions.onChanged(({ permission, granted }) => {
@@ -1180,9 +1198,9 @@ spindle.onFrontendMessage(async (payload, userId) => {
   if (["continuity_import_setup", "continuity_export_setup", "continuity_begin_setup"].includes(type)) {
     await handleSetupAction(payload, userId);
   } else if (type === "continuity_get_status") {
-    const chatId = adoptActiveChat(payload.chatId, userId);
+    const chatId = chatForRequest(payload, userId);
     if (chatId) scheduleReconcile(chatId, {}, userId);
-    sendFrontend(await statusPayload(chatId, { includePrivate: Boolean(payload.includePrivate) }), userId);
+    await publishStatus(chatId, { includePrivate: Boolean(payload.includePrivate) }, userId);
   } else if (type === "continuity_get_connections") {
     let connections = [];
     let error = "";
@@ -1205,7 +1223,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
   } else if (type === "continuity_save_config") {
     const config = await saveConfig(payload.config);
     sendFrontend({ type: "continuity_config_saved", config }, userId);
-    const chatId = adoptActiveChat(payload.chatId, userId);
+    const chatId = chatForRequest(payload, userId);
     if (chatId) scheduleReconcile(chatId, {}, userId);
   } else if (
     type === "continuity_set_widget_visibility"
@@ -1213,7 +1231,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
   ) {
     const config = await saveWidgetVisibility(payload.showStatusWidget);
     sendFrontend({ type: "continuity_config_saved", config }, userId);
-    const chatId = adoptActiveChat(payload.chatId, userId);
+    const chatId = chatForRequest(payload, userId);
     if (chatId) publishStatus(chatId, {}, userId);
   } else if (type === "continuity_scan_cleanup") {
     sendFrontend({
@@ -1308,7 +1326,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }, userId);
     }
   } else if (type === "continuity_reprocess") {
-    const chatId = adoptActiveChat(payload.chatId, userId);
+    const chatId = chatForRequest(payload, userId);
     if (!chatId) {
       sendFrontend({
         type: "continuity_action_result",
@@ -1342,7 +1360,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
       status,
     }, userId);
   } else if (type === "continuity_migrate") {
-    const chatId = adoptActiveChat(payload.chatId, userId);
+    const chatId = chatForRequest(payload, userId);
     if (!chatId) {
       sendFrontend({
         type: "continuity_action_result",
@@ -1386,6 +1404,8 @@ export const backendTest = Object.freeze({
   safeChatToken,
   isInertStore,
   adoptActiveChat,
+  chatForRequest,
+  selectedChat,
   userForChat,
   normalizeForkEvent,
   inheritForkCheckpoints,

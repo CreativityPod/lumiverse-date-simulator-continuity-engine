@@ -396,7 +396,8 @@ export function setup(ctx) {
   const mountedComponents = [];
   let latestStatus = null;
   let latestConnections = [];
-  let activeChatId = null;
+  // undefined means startup selection is not known yet; null means Home.
+  let activeChatId;
   let connectionDiagnostic = "Loading connection profiles…";
   let connectionPermissionGranted = null;
   let showPrivateState = false;
@@ -925,7 +926,7 @@ export function setup(ctx) {
   function requestStatus() {
     ctx.sendToBackend({
       type: "continuity_get_status",
-      chatId: activeChatId,
+      ...(activeChatId === undefined ? {} : { chatId: activeChatId }),
       includePrivate: showPrivateState,
     });
   }
@@ -1390,6 +1391,11 @@ export function setup(ctx) {
   }
 
   function renderStatus(status) {
+    const statusChatId = typeof status?.chatId === "string" && status.chatId ? status.chatId : null;
+    // Status describes a chat; it never changes the current route. During
+    // bootstrap only, the backend may supply the host's already-selected chat.
+    if (activeChatId !== undefined && statusChatId !== activeChatId) return;
+    if (activeChatId === undefined) activeChatId = statusChatId;
     if (status.caseMessageId) {
       const { chatId, caseMessageId, profileSaved, code, text, level } = status;
       profileStatusByMessage.set(caseMessageId, { chatId, caseMessageId, profileSaved, code, text, level });
@@ -1397,7 +1403,6 @@ export function setup(ctx) {
       updateProfileCards(status, true);
       scheduleProfileCardSync();
     }
-    if (status.chatId && activeChatId && status.chatId !== activeChatId) return;
     const resolvedWidgetPreference = resolveStatusWidgetPreference(
       status,
       pendingStatusWidgetPreference,
@@ -1405,15 +1410,14 @@ export function setup(ctx) {
     status = resolvedWidgetPreference.status;
     pendingStatusWidgetPreference = resolvedWidgetPreference.pendingPreference;
     latestStatus = status;
-    if (typeof status.chatId === "string" && status.chatId) activeChatId = status.chatId;
-    statusText.textContent = status.text;
+    statusText.textContent = statusChatId ? status.text : "No active chat.";
     const localRevisionAt = formatLocalTimestamp(status.lastRevisionAt);
     statusMeta.textContent = status.chatId
       ? `Revision ${status.revision || 0}${localRevisionAt ? ` · Last revised ${localRevisionAt}` : ""}${controls.native ? "" : " · compatibility controls"}`
       : "No active chat.";
     statusMeta.title = status.lastRevisionAt || "";
-    const badgeText = status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
-    const badgeColor = status.processing ? "info" : status.level === "green" ? "success" : "warning";
+    const badgeText = !statusChatId ? "Idle" : status.processing ? "Updating" : status.level === "green" ? "Ready" : "Attention";
+    const badgeColor = !statusChatId || status.processing ? "info" : status.level === "green" ? "success" : "warning";
     badgeControl.update({ text: badgeText, color: badgeColor });
     controls.enabled.set(status.config?.enabled !== false);
     controls.showStatusWidget.set(status.config?.showStatusWidget !== false);
@@ -1699,6 +1703,12 @@ export function setup(ctx) {
     renderSetupControls();
     clearStatusWidgetTimers();
     applyStatusWidgetPresentation(statusWidgetPresentation(null));
+    statusText.textContent = chatId ? "Loading chat status…" : "No active chat.";
+    statusMeta.textContent = chatId ? "" : "No active chat.";
+    statusMeta.title = "";
+    badgeControl.update({ text: chatId ? "Loading" : "Idle", color: "info" });
+    tab.setBadge(null);
+    renderPublicState(null);
     renderPrivateState(null);
     for (const card of mountedProfileCards()) armCardWatchdog(card);
     requestStatus();
@@ -1715,10 +1725,9 @@ export function setup(ctx) {
   }
   for (const eventName of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SENT"]) {
     cleanups.push(ctx.events.on(eventName, (payload) => {
-      if (typeof payload?.chatId === "string" && payload.chatId) {
-        if (eventName === "CHARACTER_MESSAGE_RENDERED" || !activeChatId) changeActiveChat(payload.chatId);
-        else if (payload.chatId !== activeChatId) return;
-      }
+      // Render and message events can arrive after navigation. They may refresh
+      // the selected chat, but they must never select or resurrect one.
+      if (!activeChatId || payload?.chatId !== activeChatId) return;
       rescanDelayedProfiles();
       for (const card of mountedProfileCards()) armCardWatchdog(card);
       requestStatus();
@@ -1727,7 +1736,18 @@ export function setup(ctx) {
   }
 
   ctx.ready();
-  requestStatus();
+  // Match Shutter's safe bootstrap without subscribing to host state during
+  // setup. Older Lumiverse builds fall back to the backend's selected chat.
+  if (typeof ctx.getActiveChat === "function") {
+    try {
+      const active = ctx.getActiveChat();
+      changeActiveChat(typeof active?.chatId === "string" && active.chatId ? active.chatId : null);
+    } catch {
+      requestStatus();
+    }
+  } else {
+    requestStatus();
+  }
   ctx.sendToBackend({ type: "continuity_get_connections" });
 
   return () => {

@@ -195,10 +195,12 @@ test('backend imports, begins, reloads, forks, and exports the initial state aft
     messageIdMap: Object.fromEntries(importedMessages.map((m) => [m.id, `fork-${m.id}`])) }, 'user');
   await events.get('MESSAGE_EDITED')({ chatId: 'fork' }, 'user');
   assert.equal(trackerCalls, 2);
+  await events.get('CHAT_SWITCHED')({ chatId: 'fork' }, 'user');
   assert.equal((await call('continuity_export_setup', {}, 'fork')).fileText, originalExport.fileText);
   assert.ok(trackerSourceMessageIds(files.get('chats/fork.json').current).every((id) => id === `fork-${importedId}`));
   chats.get('chat').push({ id: 'reset', role: 'assistant', content: '# New Case\n<!--DATE_SIM_RESET-->\n' + card.first_mes });
   await events.get('MESSAGE_EDITED')({ chatId: 'chat' }, 'user');
+  await events.get('CHAT_SWITCHED')({ chatId: 'chat' }, 'user');
   assert.equal(files.get('chats/chat.json').current, null);
   assert.equal(files.get('chats/chat.json').initialSetup, null);
   assert.equal((await call('continuity_export_setup')).ok, false);
@@ -212,6 +214,7 @@ test('backend imports, begins, reloads, forks, and exports the initial state aft
   chats.set('native', [menu, { id: 'native-u', role: 'user', content: 'Surprise me' },
     { id: 'native-a', role: 'assistant', content: `She glances up.\n<!--DATE_SIM_CASE\n${profile}\nEND_DATE_SIM_CASE-->` }]);
   await events.get('MESSAGE_EDITED')({ chatId: 'native' }, 'user');
+  await events.get('CHAT_SWITCHED')({ chatId: 'native' }, 'user');
   const nativeExport = await call('continuity_export_setup', {}, 'native');
   assert.equal(nativeExport.ok, true);
   const nativeStore = files.get('chats/native.json');

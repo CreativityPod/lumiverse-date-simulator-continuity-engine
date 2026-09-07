@@ -8,7 +8,7 @@ const fixture = JSON.parse(await readFile(new URL("./fixtures/date-simulator-v1.
 const fileText = JSON.stringify({ format: "date-simulator-initial-setup", version: 1, profile: fixture.profile, initialState: { private: "é & < >" } });
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-function mount(t, { secure = true, savePicker, pickFile = async () => [] } = {}) {
+function mount(t, { secure = true, savePicker, pickFile = async () => [], hostChat = true, getActiveChatThrows = false } = {}) {
   const dom = new JSDOM("<!doctype html><body><main></main></body>", { url: secure ? "https://sim.example" : "http://sim.example" });
   const { window } = dom;
   const previous = {};
@@ -21,6 +21,8 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [] } = {})
   const messages = new Map();
   const sent = [];
   const events = new Map();
+  let hostChatId = "chat-1";
+  let drawerRegistrations = 0;
   let receive;
   const root = window.document.querySelector("main");
   const ctx = {
@@ -31,7 +33,26 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [] } = {})
       listMessageElements: () => [...messages.values()],
       cleanup() {},
     },
-    ui: { registerDrawerTab: () => ({ root, destroy() {}, activate() {}, setBadge() {}, onActivate: () => () => {} }) },
+    ui: {
+      registerDrawerTab: () => {
+        drawerRegistrations++;
+        return { root, destroy() {}, activate() {}, setBadge() {}, onActivate: () => () => {} };
+      },
+      createFloatWidget() {
+        const widget = window.document.createElement("aside");
+        widget.className = "test-float-widget";
+        window.document.body.append(widget);
+        return {
+          root: widget,
+          setVisible: visible => { widget.hidden = !visible; },
+          destroy: () => widget.remove(),
+        };
+      },
+    },
+    ...(hostChat ? { getActiveChat: () => {
+      if (getActiveChatThrows) throw new Error("Host state unavailable during startup");
+      return { chatId: hostChatId };
+    } } : {}),
     uploads: { pickFile },
     events: { on(name, callback) { events.set(name, callback); return () => events.delete(name); } },
     onBackendMessage(callback) { receive = callback; return () => { receive = null; }; },
@@ -55,7 +76,15 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [] } = {})
     assert.ok(request);
     receive({ type: "continuity_setup_result", chatId: request.chatId, requestId: request.requestId, ok: true, fileText, message: "Initial setup prepared" });
   };
-  return { window, root, messages, sent, status, result, button, event: (name, payload) => events.get(name)?.(payload) };
+  return {
+    window, root, messages, sent, status, result, button,
+    drawerRegistrations: () => drawerRegistrations,
+    widgetVisible: () => [...window.document.querySelectorAll(".test-float-widget")].some(widget => !widget.hidden),
+    event(name, payload) {
+      if (name === "CHAT_SWITCHED") hostChatId = payload?.chatId ?? null;
+      return events.get(name)?.(payload);
+    },
+  };
 }
 
 test("full frontend paints saved profile status in a message root's own Shadow DOM", async t => {
@@ -236,15 +265,62 @@ test("fallback export and download can repeat in the same chat and a new chat", 
   assert.equal(h.window.document.querySelectorAll("a[download]").length, 0);
 });
 
-test("a rendered chat change releases a pending save without waiting for CHAT_SWITCHED", async t => {
+test("a rendered background chat cannot select that chat or invalidate an active save", async t => {
   let select;
+  const writes = [];
   const h = mount(t, { savePicker: () => new Promise(resolve => { select = resolve; }) });
   h.status(); h.button("Export Initial Setup").click(); h.result();
   h.event("CHARACTER_MESSAGE_RENDERED", { chatId: "chat-2" });
   h.status({ chatId: "chat-2" });
-  select({ createWritable: async () => assert.fail("Old chat must not write") });
+  select({ createWritable: async () => ({ write: async value => writes.push(value), close: async () => {} }) });
   await tick();
-  assert.equal(h.button("Export Initial Setup").disabled, false);
+  assert.deepEqual(writes, [fileText]);
+  h.button("Export Initial Setup").click();
+  assert.equal(h.sent.findLast(message => message.type === "continuity_export_setup").chatId, "chat-1");
+});
+
+test("Home hides the widget and rejects late render events and statuses until a chat is selected", t => {
+  const h = mount(t);
+  const widgetStatus = { config: { showStatusWidget: true } };
+  h.status(widgetStatus);
+  assert.equal(h.widgetVisible(), true);
+
+  h.event("CHAT_SWITCHED", { chatId: null });
+  assert.equal(h.widgetVisible(), false);
+  assert.equal(h.sent.findLast(message => message.type === "continuity_get_status").chatId, null);
+
+  const sentAtHome = h.sent.length;
+  h.event("CHARACTER_MESSAGE_RENDERED", { chatId: "chat-1" });
+  h.event("MESSAGE_SENT", { chatId: "chat-1" });
+  h.event("GENERATION_STARTED", { chatId: "chat-1" });
+  h.status(widgetStatus);
+  assert.equal(h.sent.length, sentAtHome);
+  assert.equal(h.widgetVisible(), false);
+  assert.equal(h.button("Export Initial Setup").disabled, true);
+  assert.match(h.root.textContent, /No active chat/);
+
+  h.status({ ...widgetStatus, chatId: null, caseMessageId: null, profileSaved: false, setup: {} });
+  assert.equal(h.widgetVisible(), false);
+  h.event("CHAT_SWITCHED", { chatId: "chat-2" });
+  h.status({ ...widgetStatus, chatId: "chat-2" });
+  h.status(widgetStatus);
+  assert.equal(h.widgetVisible(), true);
+  h.button("Export Initial Setup").click();
+  assert.equal(h.sent.findLast(message => message.type === "continuity_export_setup").chatId, "chat-2");
+});
+
+test("drawer registration survives unavailable host state during startup", t => {
+  const throwing = mount(t, { getActiveChatThrows: true });
+  assert.equal(throwing.drawerRegistrations(), 1);
+  assert.equal(Object.hasOwn(throwing.sent.find(message => message.type === "continuity_get_status"), "chatId"), false);
+});
+
+test("legacy bootstrap keeps the drawer and accepts the backend-selected chat", t => {
+  const legacy = mount(t, { hostChat: false });
+  assert.equal(legacy.drawerRegistrations(), 1);
+  assert.equal(Object.hasOwn(legacy.sent.find(message => message.type === "continuity_get_status"), "chatId"), false);
+  legacy.status({ config: { showStatusWidget: true } });
+  assert.equal(legacy.widgetVisible(), true);
 });
 
 test("disabled drawer buttons use Lumiverse opacity and cursor with no inline overrides", t => {
