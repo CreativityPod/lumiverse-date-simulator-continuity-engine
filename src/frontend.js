@@ -477,7 +477,7 @@ export function setup(ctx) {
     .dsc-floating-status:focus-visible { outline: 2px solid var(--lumiverse-accent, var(--lumiverse-primary)); outline-offset: 2px; }
     .dsc-floating-status svg { width: 25px; height: 25px; display: block; }
     .dsc-floating-status[data-state="ready"] { color: var(--lumiverse-success, #86af92); }
-    .dsc-floating-status[data-state="updating"] { color: var(--lumiverse-info, #4fb3ad); }
+    .dsc-floating-status[data-state="updating"] { color: var(--lumiverse-warning, #c89b62); }
     .dsc-floating-status[data-state="complete"] { color: var(--lumiverse-success, #86af92); }
     .dsc-floating-status[data-state="attention"] { color: var(--lumiverse-warning, #c89b62); }
     .dsc-floating-status[data-state="updating"] svg { animation: dsc-continuity-breathe 1.2s ease-in-out infinite; }
@@ -1269,6 +1269,7 @@ export function setup(ctx) {
         snapToEdge: true,
         tooltip: "Date Simulator Continuity",
         chromeless: true,
+        persistGeometry: "continuity-status",
       });
       const button = document.createElement("button");
       button.type = "button";

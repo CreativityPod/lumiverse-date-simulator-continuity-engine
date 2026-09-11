@@ -23,6 +23,7 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [], hostCh
   const events = new Map();
   let hostChatId = "chat-1";
   let drawerRegistrations = 0;
+  let floatWidgetOptions = null;
   let receive;
   const root = window.document.querySelector("main");
   const ctx = {
@@ -38,7 +39,8 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [], hostCh
         drawerRegistrations++;
         return { root, destroy() {}, activate() {}, setBadge() {}, onActivate: () => () => {} };
       },
-      createFloatWidget() {
+      createFloatWidget(options) {
+        floatWidgetOptions = options;
         const widget = window.document.createElement("aside");
         widget.className = "test-float-widget";
         window.document.body.append(widget);
@@ -79,6 +81,7 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [], hostCh
   return {
     window, root, messages, sent, status, result, button,
     drawerRegistrations: () => drawerRegistrations,
+    floatWidgetOptions: () => floatWidgetOptions,
     widgetVisible: () => [...window.document.querySelectorAll(".test-float-widget")].some(widget => !widget.hidden),
     event(name, payload) {
       if (name === "CHAT_SWITCHED") hostChatId = payload?.chatId ?? null;
@@ -321,6 +324,25 @@ test("legacy bootstrap keeps the drawer and accepts the backend-selected chat", 
   assert.equal(Object.hasOwn(legacy.sent.find(message => message.type === "continuity_get_status"), "chatId"), false);
   legacy.status({ config: { showStatusWidget: true } });
   assert.equal(legacy.widgetVisible(), true);
+});
+
+test("floating widget persists its geometry and uses the profile warning color while updating", t => {
+  const h = mount(t);
+  h.status({
+    profileSaved: false,
+    code: "profile_saving",
+    level: "amber",
+    text: "Continuity Engine detected. Saving the private profile outside chat context…",
+    config: { showStatusWidget: true },
+  });
+
+  assert.equal(h.floatWidgetOptions().persistGeometry, "continuity-status");
+  assert.equal(h.window.document.querySelector(".dsc-floating-status").dataset.state, "updating");
+  const styles = [...h.window.document.querySelectorAll("style")].map(style => style.textContent).join("\n");
+  assert.match(
+    styles,
+    /\.dsc-floating-status\[data-state="updating"\] \{ color: var\(--lumiverse-warning, #c89b62\); \}/,
+  );
 });
 
 test("disabled drawer buttons use Lumiverse opacity and cursor with no inline overrides", t => {
