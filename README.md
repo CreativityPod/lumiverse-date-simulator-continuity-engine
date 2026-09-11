@@ -19,7 +19,7 @@ For v1.5.5 Surprise Me setup, it also injects one deterministic branch-stable ca
 3. Open the **Continuity** drawer and optionally select a tracker connection and structured-output mode. With no selection, the active default connection and automatic provider detection are used.
 4. Import the companion matching the card version so the private-profile warning card and reset action render correctly.
 
-## Save and load an initial setup (v1.4.4)
+## Save and load an initial setup (v1.4.5)
 
 Use Date Simulator **v1.5.6**, its matching persistent-state companion, and a Lumiverse host with `ctx.uploads.pickFile` and `spindle.chat.appendMessage` with generation support. The implementation follows the local Lumiverse 1.1.6 APIs. The existing permissions are sufficient.
 
@@ -51,7 +51,7 @@ The companion profile card starts in a neutral checking state. While the extensi
 - Green: private profile saved; automatic scene and arc tracking is ready.
 - Amber: disabled, missing permission, processing, migration required, or using the last valid state after an error.
 
-The optional floating continuity widget reuses the Continuity drawer's clock icon and appears only in chats with a detected Date Simulator profile. A steady green icon means continuity is current, a gentle teal pulse means the scene and arc are updating, a brief brighter-green pulse confirms a committed revision, and amber with a small `!` means the engine needs attention. Click the widget to open the Continuity drawer. It is draggable, snaps to a screen edge, respects reduced-motion preferences, and can be disabled immediately with **Show Widget** in the drawer. The widget is a frontend-only view of existing status; it does not alter messages, prompts, variables, or checkpoints.
+The optional floating continuity widget reuses the Continuity drawer's clock icon and appears only in chats with a detected Date Simulator profile. A steady green icon means continuity is current, a gentle orange pulse means the scene and arc are updating, a brief brighter-green pulse confirms a committed revision, and amber with a small `!` means the engine needs attention. Click the widget to open the Continuity drawer. It is draggable, snaps to a screen edge, remembers its custom position across page refreshes, respects reduced-motion preferences, and can be disabled immediately with **Show Widget** in the drawer. The widget is a frontend-only view of existing status; it does not alter messages, prompts, variables, or checkpoints.
 
 The manual profile action is only a fallback when the extension is absent or automatic profile persistence cannot be confirmed because of configuration, permissions, or an unsaved error. It remains hidden after a valid automatic save even if tracking is disabled or a later tracker update is degraded. With a functioning engine, no per-case click is required.
 
@@ -78,7 +78,7 @@ Returning Home hides the floating widget, clears the drawer's chat snapshot and 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.4.4 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.4.5 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker timeouts may be configured from 5 through 120 seconds. The manifest gives prompt reconciliation a five-minute host budget, enough for one maximum-length request plus its single permitted repair and overhead. The fresh-install default is 30 seconds.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -106,8 +106,9 @@ Returning Home hides the floating widget, clears the drawer's chat snapshot and 
 - Version 1.3.7 deletes chat sidecars after Lumiverse confirms chat deletion, prevents unrelated or inactive chats from creating new inert sidecars, and adds a two-step drawer cleanup action that safely removes orphaned and never-used tracking files while retaining malformed, changing, and historical stores.
 - Version 1.3.8 inherits the exact validated checkpoint prefix when Lumiverse forks a chat, remaps every canonical source ID and checkpoint fingerprint to the copied branch messages, and prevents a normal branch from replaying one tracker request per historical turn.
 
-- Version 1.4.3 restores the v1.4.1 Download JSON File button and its temporary-anchor click behavior at user request. It retains v1.4.2 drawer styling and chat-change cleanup.
+- Version 1.4.5 persists both floating-widget coordinates across browser page refreshes and uses the profile-status warning orange while the Continuity Engine is updating.
 - Version 1.4.4 makes navigation authoritative. Returning Home hides the widget and clears chat content from the drawer; late render events, background messages, and stale status responses cannot restore the previous chat. Background reconciliation can still finish and is shown when that chat is opened again.
+- Version 1.4.3 restores the v1.4.1 Download JSON File button and its temporary-anchor click behavior at user request. It retains v1.4.2 drawer styling and chat-change cleanup.
 - Version 1.4.2 matches Lumiverse drawer button typography, theme colors, and disabled treatment. HTTP downloads use a persistent native download link styled as a button, preserving the original user click instead of proxying through a hidden scripted link. Pending saves reset consistently on chat changes. Repeated exports/downloads are covered in frontend regressions.
 - Version 1.4.1 adds visible import/export button outlines, synchronous native Save As activation and an explicit download fallback. It repairs profile status refreshes for delayed Shadow DOM rendering and prevents background message events from changing the active export target.
 - Version 1.4.0 adds file export/import for frozen initial setups, a v1.5.6 greeting button, contextual import routing, and an observation-only imported opening. It preserves the profile and initial schema-v4 state through local metadata-backed recovery and forks.
