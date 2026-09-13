@@ -338,14 +338,18 @@ test("background reconciliation saves state and the interceptor injects one bran
   assert.equal(interceptorPriority, 250);
   assert.ok(events.has("MESSAGE_SWIPED"));
   assert.equal(typeof frontendHandler, "function");
-  assert.equal(backendTest.normalizeConfig({}).maxTokens, 2_000);
+  assert.equal(backendTest.normalizeConfig({}).maxTokens, 4_096);
+  assert.equal(backendTest.normalizeConfig({}).timeoutMs, 120_000);
   assert.equal(backendTest.normalizeConfig({}).outputMode, "auto");
   assert.equal(backendTest.normalizeConfig({}).showStatusWidget, true);
   assert.equal(backendTest.normalizeConfig({ showStatusWidget: false }).showStatusWidget, false);
   assert.equal(backendTest.normalizeConfig({ outputMode: "anthropic" }).outputMode, "anthropic");
   assert.equal(backendTest.normalizeConfig({ outputMode: "unsupported" }).outputMode, "auto");
   assert.equal(backendTest.normalizeConfig({ timeoutMs: 120_000 }).timeoutMs, 120_000);
-  assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 120_000);
+  assert.equal(backendTest.normalizeConfig({ timeoutMs: 300_000 }).timeoutMs, 300_000);
+  assert.equal(backendTest.normalizeConfig({ timeoutMs: 600_000 }).timeoutMs, 300_000);
+  assert.equal(backendTest.normalizeConfig({ maxTokens: 8_192 }).maxTokens, 8_192);
+  assert.equal(backendTest.normalizeConfig({ maxTokens: 99_999 }).maxTokens, 8_192);
 
   const privateState = cloneEmptyState();
   privateState.scene.womanStable.face = "Oval face with a small chin scar.";
@@ -455,15 +459,18 @@ test("background reconciliation saves state and the interceptor injects one bran
       showStatusWidget: false,
       connectionId: "",
       outputMode: "plain",
-      maxTokens: 2_000,
-      timeoutMs: 120_000,
+      maxTokens: 8_192,
+      timeoutMs: 300_000,
     },
   }, "user-1");
-  assert.equal(files.get("config.json").timeoutMs, 120_000);
+  assert.equal(files.get("config.json").maxTokens, 8_192);
+  assert.equal(files.get("config.json").timeoutMs, 300_000);
   assert.equal(files.get("config.json").outputMode, "plain");
   assert.equal(files.get("config.json").showStatusWidget, false);
   assert.ok(frontendMessages.some(
-    (payload) => payload.type === "continuity_config_saved" && payload.config.timeoutMs === 120_000,
+    (payload) => payload.type === "continuity_config_saved"
+      && payload.config.maxTokens === 8_192
+      && payload.config.timeoutMs === 300_000,
   ));
   await frontendHandler({
     type: "continuity_set_widget_visibility",

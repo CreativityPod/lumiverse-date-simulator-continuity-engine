@@ -6,12 +6,12 @@ import {
   trackerSourceMessageIds,
 } from "./schemas.js";
 
-export const DEFAULT_TRACKER_TIMEOUT_MS = 30_000;
+export const DEFAULT_TRACKER_TIMEOUT_MS = 120_000;
 export const MIN_TRACKER_TIMEOUT_MS = 5_000;
-export const MAX_TRACKER_TIMEOUT_MS = 120_000;
-export const DEFAULT_TRACKER_MAX_TOKENS = 2_000;
+export const MAX_TRACKER_TIMEOUT_MS = 300_000;
+export const DEFAULT_TRACKER_MAX_TOKENS = 4_096;
 export const MIN_TRACKER_MAX_TOKENS = 400;
-export const MAX_TRACKER_MAX_TOKENS = 2_000;
+export const MAX_TRACKER_MAX_TOKENS = 8_192;
 export const DEFAULT_TRACKER_OUTPUT_MODE = "auto";
 export const TRACKER_OUTPUT_MODES = Object.freeze(["auto", "openai", "anthropic", "plain"]);
 

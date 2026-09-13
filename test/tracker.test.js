@@ -35,15 +35,16 @@ test("tracker prompt removes source ids and retains agency constraints", () => {
   assert.match(trackerTest.systemPrompt, /Never return sourceMessageId/);
 });
 
-test("tracker timeout fits inside the five-minute interceptor budget", () => {
+test("tracker timeout accepts the host maximum and clamps higher values", () => {
   assert.equal(trackerTest.normalizeTrackerTimeoutMs(120_000), 120_000);
-  assert.equal(trackerTest.normalizeTrackerTimeoutMs(300_000), 120_000);
-  assert.equal(trackerTest.normalizeTrackerTimeoutMs("invalid"), 30_000);
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs(300_000), 300_000);
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs(600_000), 300_000);
+  assert.equal(trackerTest.normalizeTrackerTimeoutMs("invalid"), 120_000);
 });
 
 test("uses native structured output only for recognized providers", () => {
   const openAiParameters = trackerTest.generationParameters({ provider: "openai" });
-  assert.equal(openAiParameters.max_tokens, 2_000);
+  assert.equal(openAiParameters.max_tokens, 4_096);
   assert.ok(openAiParameters.response_format);
   assert.ok(trackerTest.generationParameters({ provider: "google_gemini" }).responseSchema);
   assert.equal(
