@@ -17,7 +17,7 @@ export const CHAT_KEYS = Object.freeze({
 });
 
 export const INACTIVE_CASE = "INACTIVE: The previous case ended. Await a new case capsule.";
-export const VERSION_PATTERN = /<date_simulator_version>\s*1\.(?:4|5)(?:\.\d+)?\s*<\/date_simulator_version>/i;
+export const VERSION_PATTERN = /<date_simulator_version>\s*1\.(?:4|5|6)(?:\.\d+)?\s*<\/date_simulator_version>/i;
 export const V15_VERSION_PATTERN = /<date_simulator_version>\s*1\.5(?:\.\d+)?\s*<\/date_simulator_version>/i;
 export const CASE_PATTERN = /<!--DATE_SIM_CASE\s*([\s\S]*?)\s*END_DATE_SIM_CASE-->/gi;
 export const LEGACY_SCENE_PATTERN = /<!--DATE_SIM_SCENE\s*([\s\S]*?)\s*END_DATE_SIM_SCENE-->/gi;
@@ -59,8 +59,8 @@ export function validateSetupFile(input) {
     if (typeof value.profile !== "string") throw new Error("Setup profile must be text.");
     const profile = validateCaseCapsuleDetailed(value.profile);
     if (!profile.value) throw new Error(profile.error);
-    if (!/\bDate Simulator v1\.(?:4|5)(?:\.\d+)?\b/.test(profile.value.split("\n")[0])) {
-      throw new Error("This setup requires a Date Simulator v1.4 or v1.5 profile.");
+    if (!/(?:\bDate Simulator v1\.(?:4|5)(?:\.\d+)?\b|\bStory Teller v1\.6(?:\.\d+)?\b)/.test(profile.value.split("\n")[0])) {
+      throw new Error("This setup requires a Date Simulator v1.4/v1.5 or Story Teller v1.6 profile.");
     }
     if (/<\/?[a-z][^>]*>/i.test(profile.value)) throw new Error("Setup profile must not contain markup.");
     if (trackerSourceMessageIds(value.initialState).some((id) => id !== "initial-setup")) {

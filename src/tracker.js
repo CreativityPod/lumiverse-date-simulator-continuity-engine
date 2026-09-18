@@ -21,7 +21,7 @@ function normalizeTrackerTimeoutMs(value) {
   return Math.max(MIN_TRACKER_TIMEOUT_MS, Math.min(MAX_TRACKER_TIMEOUT_MS, Math.round(parsed)));
 }
 
-const TRACKER_SYSTEM_PROMPT = `You are the private continuity recorder for Date Simulator. Update a compact current-state ledger from canonical prior state and one newly completed public roleplay turn.
+const TRACKER_SYSTEM_PROMPT = `You are the private continuity recorder for Story Teller and Date Simulator. Update a compact current-state ledger from canonical prior state and one newly completed public roleplay turn.
 
 Hard rules:
 - Record consequences of the supplied turn; never create new dialogue, actions, events, NPC activity, promises, consent, or public story developments.

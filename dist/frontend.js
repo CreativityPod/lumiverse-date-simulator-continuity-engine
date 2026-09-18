@@ -97,7 +97,7 @@ export function statusWidgetPresentation(status, completed = false) {
     return {
       visible: false,
       state: "inactive",
-      label: "No active Date Simulator profile.",
+      label: "No active compatible story profile.",
     };
   }
 
@@ -623,7 +623,7 @@ export function setup(ctx) {
     statusWidgetLabel.textContent = "Show Widget";
     const statusWidgetHint = document.createElement("div");
     statusWidgetHint.className = "dsc-hint";
-    statusWidgetHint.textContent = "Show a draggable status icon in active Date Simulator chats.";
+    statusWidgetHint.textContent = "Show a draggable status icon in active compatible story chats.";
     statusWidgetCopy.append(statusWidgetLabel, statusWidgetHint);
     const statusWidgetSlot = document.createElement("div");
     statusWidgetSlot.className = "dsc-toggle-slot";
@@ -767,7 +767,7 @@ export function setup(ctx) {
     });
     const statusWidgetHint = document.createElement("div");
     statusWidgetHint.className = "dsc-hint";
-    statusWidgetHint.textContent = "Show a draggable status icon in active Date Simulator chats.";
+    statusWidgetHint.textContent = "Show a draggable status icon in active compatible story chats.";
     statusWidgetRow.append(statusWidgetLabel, statusWidgetHint);
 
     const connectionField = createField("Tracker connection");
@@ -1223,7 +1223,7 @@ export function setup(ctx) {
     const hint = controls?.statusWidgetHint;
     if (!hint) return;
     hint.dataset.level = level;
-    hint.textContent = message || "Show a draggable status icon in active Date Simulator chats.";
+    hint.textContent = message || "Show a draggable status icon in active compatible story chats.";
   }
 
   function clearStatusWidgetTimers() {
@@ -1440,7 +1440,7 @@ export function setup(ctx) {
     exportSetupButton.disabled = setupBusy || !available.canExport;
     beginSetupButton.disabled = setupBusy || generationBusy || !available.canBegin;
     beginSetupButton.hidden = !available.canBegin;
-    importSetupButton.title = available.canImport ? "Choose a saved setup JSON file" : "Open a v1.5.6 startup menu to import a setup";
+    importSetupButton.title = available.canImport ? "Choose a saved setup JSON file" : "Open a compatible startup screen to import a setup";
     exportSetupButton.title = available.canExport ? "Save the frozen opening baseline" : "The original opening checkpoint is not available yet";
   }
 
@@ -1532,7 +1532,7 @@ export function setup(ctx) {
   });
   const reprocessButton = createButton("Reprocess Latest Turn", () => {
     if (!activeChatId) {
-      setActionFeedback("Open a Date Simulator chat before reprocessing.", "amber");
+      setActionFeedback("Open a compatible story chat before reprocessing.", "amber");
       requestStatus();
       return;
     }
@@ -1545,7 +1545,7 @@ export function setup(ctx) {
   });
   const migrateButton = createButton("Migrate Current Chat", () => {
     if (!activeChatId) {
-      setActionFeedback("Open a Date Simulator chat before migrating.", "amber");
+      setActionFeedback("Open a compatible story chat before migrating.", "amber");
       requestStatus();
       return;
     }
