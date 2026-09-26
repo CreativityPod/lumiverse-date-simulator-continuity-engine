@@ -67,12 +67,12 @@ test("presents contextual floating-widget states without exposing private data",
   assert.deepEqual(statusWidgetPresentation(null), {
     visible: false,
     state: "inactive",
-    label: "No active Date Simulator profile.",
+    label: "No active compatible story profile.",
   });
   assert.deepEqual(statusWidgetPresentation({ chatId: "other", code: "ready_no_profile" }), {
     visible: false,
     state: "inactive",
-    label: "No active Date Simulator profile.",
+    label: "No active compatible story profile.",
   });
 
   assert.deepEqual(statusWidgetPresentation({

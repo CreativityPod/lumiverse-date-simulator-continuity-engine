@@ -343,7 +343,7 @@ function readiness(config) {
   return {
     level: "green",
     code: "ready",
-    text: "Continuity Engine ready. Open a Date Simulator v1.4.x or v1.5.x chat to begin tracking.",
+    text: "Continuity Engine ready. Open a compatible Date Simulator or Story Teller chat to begin tracking.",
   };
 }
 
@@ -508,7 +508,7 @@ async function statusPayload(chatId, options = {}) {
     payload.text = "Continuity Engine active. Private profile saved; scene and arc tracking are automatic.";
   } else if (base.level === "green") {
     payload.code = "ready_no_profile";
-    payload.text = "Continuity Engine ready. No Date Simulator v1.4.x or v1.5.x private profile was found in this chat yet.";
+    payload.text = "Continuity Engine ready. No compatible Date Simulator or Story Teller private profile was found in this chat yet.";
   }
   if (options.includePrivate) payload.state = store.current;
   return payload;
@@ -642,7 +642,7 @@ async function reconcileChat(chatId, options = {}, userId) {
   await mirrorStore(chatId, store, context);
   await publishStatus(chatId, {}, scopedUserId);
 
-  const nativeCurrent = /\b(?:Date Simulator\s+)?v1\.(?:4(?:\.\d+)?|5)\b/i.test(context.caseText);
+  const nativeCurrent = /\b(?:Date Simulator\s+v1\.(?:4(?:\.\d+)?|5(?:\.\d+)?)|Story Teller\s+v1\.6(?:\.\d+)?)\b/i.test(context.caseText);
   if (!nativeCurrent && !store.migrationAccepted && !options.allowMigration) {
     store.migrationRequired = true;
     store.processing = false;
@@ -814,7 +814,7 @@ async function handleSetupAction(payload, userId) {
   }, userId);
   const perform = async () => {
     try {
-      if (!chatId || deletedChats.has(chatId)) throw new Error("Open a Date Simulator chat first.");
+      if (!chatId || deletedChats.has(chatId)) throw new Error("Open a compatible story chat first.");
       if (chatForRequest(payload, userId) !== chatId) throw new Error("The active chat changed. Open the intended chat and try again.");
       if (!spindle.permissions.has("chat_mutation")) throw new Error("Continuity Engine needs chat_mutation permission.");
       const messages = await spindle.chat.getMessages(chatId);
@@ -833,7 +833,7 @@ async function handleSetupAction(payload, userId) {
         respond(true, "Initial setup is ready to save.", { fileText: `${JSON.stringify(result.value, null, 2)}\n`, filename: "date-simulator-initial-setup.json" });
       } else if (payload.type === "continuity_import_setup") {
         if (generatingChats.has(chatId)) throw new Error("Wait for the current response to finish before importing.");
-        if (!available.canImport) throw new Error("Import requires an unused v1.5.6 startup menu and an enabled Continuity Engine with its required permissions. Open a new chat or reset this case first.");
+        if (!available.canImport) throw new Error("Import requires an unused compatible startup screen and an enabled Continuity Engine with its required permissions. Open a new chat or reset the current story first.");
         if (!payload.fingerprint || payload.fingerprint !== available.fingerprint) throw new Error("The chat changed while choosing the file. Choose the file again from the current setup.");
         const result = validateSetupFile(payload.fileText);
         if (!result.value) throw new Error(result.error);
@@ -1332,7 +1332,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         type: "continuity_action_result",
         action: "reprocess",
         ok: false,
-        message: "Open a Date Simulator chat before reprocessing.",
+        message: "Open a compatible story chat before reprocessing.",
       }, userId);
       return;
     }
@@ -1366,7 +1366,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
         type: "continuity_action_result",
         action: "migrate",
         ok: false,
-        message: "Open a Date Simulator chat before migrating.",
+        message: "Open a compatible story chat before migrating.",
       }, userId);
       return;
     }

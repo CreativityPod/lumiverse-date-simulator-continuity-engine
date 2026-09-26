@@ -43,6 +43,14 @@ test('portable setup validates real card profiles and rejects invalid or nonport
   assert.equal(validateSetupFile(' '.repeat(256 * 1024 + 1)).value, null);
 });
 
+test('portable setup accepts native Story Teller v1.6 profiles without weakening the fixed fields', () => {
+  const story = setupFile();
+  story.profile = profile.replace('Date Simulator v1.5.6', 'Story Teller v1.6.0');
+  assert.ok(validateSetupFile(story).value);
+  story.profile = story.profile.replace('CURRENT CONTEXT:', 'STORY CONTEXT:');
+  assert.equal(validateSetupFile(story).value, null);
+});
+
 test('metadata import follows reset, active swipe, and branch fingerprint boundaries', () => {
   const a = anchor();
   const messages = [menu, a];

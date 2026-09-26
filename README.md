@@ -1,13 +1,13 @@
 # Date Simulator Continuity Engine
 
-An optional Lumiverse extension for Date Simulator v1.4 and v1.5. It runs a small background LLM update after immersive turns, stores branch-safe scene, relationship, and private-response checkpoints, and privately injects a compact projection of the latest state before the next roleplay generation.
+An optional Lumiverse extension for Date Simulator v1.4/v1.5 and Story Teller v1.6. It runs a small background LLM update after immersive turns, stores branch-safe scene, relationship, and private-response checkpoints, and privately injects a compact projection of the latest state before the next roleplay generation.
 
 For v1.5.5 Surprise Me setup, it also injects one deterministic branch-stable casting draw across independent situation and engagement axes. An explicit `Surprise Me` always qualifies before a case is saved; a bare `1` qualifies only after the marked top-level startup menu. The draw is prompt-only, idempotent, never becomes story state, and never selects an outcome.
 
 ## Compatibility
 
-- Intended card: `Date_Simulator_CCv3_v1.5.6.json`.
-- Matching companion regex package: `Date_Simulator_Persistent_State_v1.5.6.json`.
+- Supported cards: Date Simulator v1.4/v1.5 and Story Teller v1.6.
+- Use the persistent-state companion matching the selected card.
 - Do not enable the legacy v1.3.1 State Bridge on the same chat.
 - Earlier v1.4/v1.5 prompts remain recognizable for continuity tracking, but contextual numeric startup routing and structural saved-case suppression require the coordinated v1.5.5 markers.
 - v1.5.5 remains usable without this extension, but it deliberately has no inline structured scene fallback.
@@ -19,9 +19,9 @@ For v1.5.5 Surprise Me setup, it also injects one deterministic branch-stable ca
 3. Open the **Continuity** drawer and optionally select a tracker connection and structured-output mode. With no selection, the active default connection and automatic provider detection are used.
 4. Import the companion matching the card version so the private-profile warning card and reset action render correctly.
 
-## Save and load an initial setup (v1.4.6)
+## Save and load an initial setup (v1.4.7)
 
-Use Date Simulator **v1.5.6**, its matching persistent-state companion, and a Lumiverse host with `ctx.uploads.pickFile` and `spindle.chat.appendMessage` with generation support. The implementation follows the local Lumiverse 1.1.6 APIs. The existing permissions are sufficient.
+Use a supported card, its matching persistent-state companion, and a Lumiverse host with `ctx.uploads.pickFile` and `spindle.chat.appendMessage` with generation support. The implementation follows the local Lumiverse 1.1.6 APIs. The existing permissions are sufficient.
 
 - **Export Initial Setup** opens the native Save As picker when the browser supports it on a secure connection (HTTPS or localhost). Choose a location to write `date-simulator-initial-setup.json`.
 - On a remote HTTP connection or a browser without that API, export prepares the file and displays a **Download JSON File** control styled like Lumiverse’s primary buttons. Click it to start the download. Whether a Save As window appears then depends on browser download settings; otherwise check Downloads. You can rename and keep as many files as you like.
@@ -51,7 +51,7 @@ The companion profile card starts in a neutral checking state. While the extensi
 - Green: private profile saved; automatic scene and arc tracking is ready.
 - Amber: disabled, missing permission, processing, migration required, or using the last valid state after an error.
 
-The optional floating continuity widget reuses the Continuity drawer's clock icon and appears only in chats with a detected Date Simulator profile. A steady green icon means continuity is current, a gentle orange pulse means the scene and arc are updating, a brief brighter-green pulse confirms a committed revision, and amber with a small `!` means the engine needs attention. Click the widget to open the Continuity drawer. It is draggable, snaps to a screen edge, remembers its custom position across page refreshes, respects reduced-motion preferences, and can be disabled immediately with **Show Widget** in the drawer. The widget is a frontend-only view of existing status; it does not alter messages, prompts, variables, or checkpoints.
+The optional floating continuity widget reuses the Continuity drawer's clock icon and appears only in chats with a detected compatible profile. A steady green icon means continuity is current, a gentle orange pulse means the scene and arc are updating, a brief brighter-green pulse confirms a committed revision, and amber with a small `!` means the engine needs attention. Click the widget to open the Continuity drawer. It is draggable, snaps to a screen edge, remembers its custom position across page refreshes, respects reduced-motion preferences, and can be disabled immediately with **Show Widget** in the drawer. The widget is a frontend-only view of existing status; it does not alter messages, prompts, variables, or checkpoints.
 
 The manual profile action is only a fallback when the extension is absent or automatic profile persistence cannot be confirmed because of configuration, permissions, or an unsaved error. It remains hidden after a valid automatic save even if tracking is disabled or a later tracker update is degraded. With a functioning engine, no per-case click is required.
 
@@ -78,7 +78,7 @@ Returning Home hides the floating widget, clears the drawer's chat snapshot and 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.4.6 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.4.7 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker output may be configured from 400 through 8,192 tokens; the fresh-install default is 4,096 tokens. Tracker timeouts may be configured from 5 through 300 seconds; the fresh-install default is 120 seconds. The manifest gives prompt reconciliation the host's maximum five-minute interceptor budget. A 300-second request can consume that entire budget, so the default leaves room for the tracker's single permitted repair and overhead.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -106,6 +106,7 @@ Returning Home hides the floating widget, clears the drawer's chat snapshot and 
 - Version 1.3.7 deletes chat sidecars after Lumiverse confirms chat deletion, prevents unrelated or inactive chats from creating new inert sidecars, and adds a two-step drawer cleanup action that safely removes orphaned and never-used tracking files while retaining malformed, changing, and historical stores.
 - Version 1.3.8 inherits the exact validated checkpoint prefix when Lumiverse forks a chat, remaps every canonical source ID and checkpoint fingerprint to the copied branch messages, and prevents a normal branch from replaying one tracker request per historical turn.
 
+- Version 1.4.7 adds native Story Teller v1.6 prompt and profile support while preserving Date Simulator v1.4/v1.5 setup imports and legacy file/state identifiers.
 - Version 1.4.6 raises the fresh-install tracker output default to 4,096 tokens and its configurable ceiling to 8,192 tokens, while raising the tracker timeout default to 120 seconds and its configurable ceiling to 300 seconds.
 - Version 1.4.5 persists both floating-widget coordinates across browser page refreshes and uses the profile-status warning orange while the Continuity Engine is updating.
 - Version 1.4.4 makes navigation authoritative. Returning Home hides the widget and clears chat content from the drawer; late render events, background messages, and stale status responses cannot restore the previous chat. Background reconciliation can still finish and is shown when that chat is opened again.

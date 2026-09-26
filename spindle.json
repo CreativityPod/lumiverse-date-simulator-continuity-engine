@@ -1,11 +1,11 @@
 {
-  "version": "1.4.6",
+  "version": "1.4.7",
   "name": "Date Simulator Continuity Engine",
   "identifier": "date_simulator_continuity_engine",
   "author": "CreativityPod",
   "github": "https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine",
   "homepage": "https://github.com/CreativityPod/lumiverse-date-simulator-continuity-engine",
-  "description": "Tracks Date Simulator continuity and imports/exports private profiles with frozen initial state as reusable JSON setups.",
+  "description": "Tracks Date Simulator and Story Teller continuity and imports/exports private profiles with frozen initial state as reusable JSON setups.",
   "permissions": [
     "generation",
     "interceptor",
