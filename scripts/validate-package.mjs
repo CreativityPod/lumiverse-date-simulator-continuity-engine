@@ -1,4 +1,5 @@
 import { access, readFile } from "node:fs/promises";
+import { Script } from "node:vm";
 
 const root = new URL("..", import.meta.url);
 const manifest = JSON.parse(await readFile(new URL("spindle.json", root), "utf8"));
@@ -28,6 +29,12 @@ for (const entry of [manifest.entry_backend, manifest.entry_frontend]) {
 
 const backend = await readFile(new URL(manifest.entry_backend, root), "utf8");
 const frontend = await readFile(new URL(manifest.entry_frontend, root), "utf8");
+try {
+  new Script(backend, { filename: manifest.entry_backend });
+} catch (error) {
+  failures.push(`Backend bundle syntax: ${error.message}`);
+}
+check(backend.includes("const nativeCurrent = isSupportedProfile(context.caseText)"), "Native reconciliation shares portable-import profile recognition");
 check(!/^import\s/m.test(backend), "Backend bundle has no imports");
 check(!/^export\s/m.test(backend), "Backend bundle has no exports");
 check(backend.includes("registerInterceptor"), "Backend registers an interceptor");

@@ -6,21 +6,22 @@ import {
   SETUP_FORMAT, IMPORT_LOADED_TEXT, assignSetupSources, validateSetupFile,
   deriveTranscriptContext, importedSetupForMessage, initialSetupForBranch,
   isImportSetupSelection, listEligibleTurns, prefixFingerprint, createStore,
-  stripStartupMenuMarkers,
+  stripStartupMenuMarkers, isSupportedProfile,
 } from '../src/state.js';
 import { pickSetupFile } from '../src/frontend.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/date-simulator-v1.5.6-setup.json', import.meta.url)));
+const storyFixture = JSON.parse(readFileSync(new URL('./fixtures/storyteller-v1.6.0-setup.json', import.meta.url)));
 const card = { first_mes: fixture.firstMessage, post_history_instructions: fixture.versionMarker };
 const profile = fixture.profile;
 const menu = { id: 'menu', role: 'assistant', content: card.first_mes };
-function setupFile() {
+function setupFile(profileText = profile) {
   const state = cloneEmptyState();
   state.scene.location = 'Original cafe';
   state.scene.lifecycle.sourceMessageId = 'initial-setup';
   state.arc.response.latestChange = 'Initial curiosity.';
   state.arc.response.sourceMessageId = 'initial-setup';
-  return { format: SETUP_FORMAT, version: 1, profile, initialState: state };
+  return { format: SETUP_FORMAT, version: 1, profile: profileText, initialState: state };
 }
 function anchor(id = 'imported') {
   return { id, role: 'assistant', content: IMPORT_LOADED_TEXT, metadata: { date_simulator_setup: setupFile() } };
@@ -43,12 +44,35 @@ test('portable setup validates real card profiles and rejects invalid or nonport
   assert.equal(validateSetupFile(' '.repeat(256 * 1024 + 1)).value, null);
 });
 
-test('portable setup accepts native Story Teller v1.6 profiles without weakening the fixed fields', () => {
+test('portable setup accepts native Storyteller v1.6 profiles without weakening the fixed fields', () => {
   const story = setupFile();
-  story.profile = profile.replace('Date Simulator v1.5.6', 'Story Teller v1.6.0');
+  story.profile = profile.replace('Date Simulator v1.5.6', 'Storyteller v1.6.0');
   assert.ok(validateSetupFile(story).value);
   story.profile = story.profile.replace('CURRENT CONTEXT:', 'STORY CONTEXT:');
   assert.equal(validateSetupFile(story).value, null);
+});
+
+test('profile recognition uses supported CASE identities rather than visible card labels or later mentions', () => {
+  for (const identity of ['Date Simulator v1.4', 'Date Simulator v1.5.7', 'Storyteller v1.6.0']) {
+    assert.equal(isSupportedProfile(`CASE: sample; ${identity}; Adult Mode.\nWOMAN: Sample.`), true);
+  }
+  for (const identity of ['Storyteller v1.5.7', 'Storyteller v1.60', 'Different Engine v1.6.0']) {
+    assert.equal(isSupportedProfile(`CASE: sample; ${identity}.\nWOMAN: Storyteller v1.6.0.`), false);
+  }
+});
+
+test('invalid or missing imported metadata reports the failure instead of silently losing loaded state', () => {
+  const invalid = anchor();
+  invalid.metadata.date_simulator_setup.profile = profile.replace('Date Simulator v1.5.6', 'Different Engine v1.6.0');
+  const context = deriveTranscriptContext([menu, invalid]);
+  assert.equal(context.active, false);
+  assert.equal(context.invalidCaseMessageId, invalid.id);
+  assert.match(context.caseError, /saved setup in this chat is invalid.*CASE profile header/);
+  assert.equal(importedSetupForMessage(invalid), null);
+  const missing = { ...anchor(), metadata: {} };
+  assert.match(deriveTranscriptContext([menu, missing]).caseError, /no saved setup metadata/);
+  assert.equal(deriveTranscriptContext([menu, invalid, anchor('valid')]).caseError, '');
+  assert.equal(deriveTranscriptContext([menu, invalid, { id: 'reset', role: 'assistant', content: '<!--DATE_SIM_RESET-->' }]).caseError, '');
 });
 
 test('metadata import follows reset, active swipe, and branch fingerprint boundaries', () => {
@@ -106,7 +130,15 @@ test('picker is file based, handles cancellation, and rejects a changed chat or 
   await assert.rejects(pickSetupFile(ctx, target, () => 'chat'), /exceeds/);
 });
 
-test('backend imports, begins, reloads, forks, and exports the initial state after later play', async () => {
+for (const scenario of [
+  { name: 'Date Simulator source', fixture, backend: '../src/backend.js' },
+  { name: 'Storyteller source', fixture: storyFixture, backend: '../src/backend.js' },
+  { name: 'Storyteller shipped bundle', fixture: storyFixture, backend: '../dist/backend.js' },
+]) test(`backend imports, begins, reloads, forks, and exports initial state: ${scenario.name}`, async () => {
+  const card = { first_mes: scenario.fixture.firstMessage, post_history_instructions: scenario.fixture.versionMarker };
+  const menu = { id: 'menu', role: 'assistant', content: card.first_mes };
+  const profile = scenario.fixture.profile;
+  const expectedSetup = setupFile(profile);
   const events = new Map(), files = new Map(), variables = new Map(), outputs = [];
   const chats = new Map([['chat', [structuredClone(menu)]], ['other', [structuredClone(menu)]]]);
   let handler, interceptor, counter = 0, trackerCalls = 0, beginCalls = 0;
@@ -151,14 +183,14 @@ test('backend imports, begins, reloads, forks, and exports the initial state aft
     sendToFrontend: (data) => outputs.push(structuredClone(data)),
     log: { info() {}, warn() {}, error() {} },
   };
-  await import(`../src/backend.js?setup-integration=${Date.now()}`);
+  await import(`${scenario.backend}?setup-integration=${encodeURIComponent(scenario.name)}-${Date.now()}`);
   const call = async (type, extra = {}, chatId = 'chat') => {
     const requestId = `request-${++counter}`;
     await handler({ type, chatId, requestId, ...extra }, 'user');
     return outputs.findLast((o) => o.requestId === requestId);
   };
   const fingerprint = () => prefixFingerprint(chats.get('chat'), chats.get('chat').length - 1);
-  const raw = JSON.stringify(setupFile());
+  const raw = JSON.stringify(expectedSetup);
   assert.equal((await call('continuity_import_setup', { fileText: '{', fingerprint: fingerprint() })).ok, false);
   assert.equal(chats.get('chat').length, 1);
   assert.equal(files.has('chats/chat.json'), false);
@@ -166,10 +198,17 @@ test('backend imports, begins, reloads, forks, and exports the initial state aft
   granted.delete('interceptor');
   assert.equal((await call('continuity_import_setup', { fileText: raw, fingerprint: fingerprint() })).ok, false);
   granted.add('interceptor');
+  const unsupported = structuredClone(expectedSetup);
+  unsupported.profile = unsupported.profile.replace(/(?:Date Simulator|Storyteller) v1\.[\d.]+/, 'Different Engine v1.6.0');
+  const rejected = await call('continuity_import_setup', { fileText: JSON.stringify(unsupported), fingerprint: fingerprint() });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.message, /CASE profile header/);
+  assert.equal(chats.get('chat').length, 1);
   const result = await call('continuity_import_setup', { fileText: raw, fingerprint: fingerprint() });
   assert.equal(result.ok, true, result.message);
   assert.equal(result.status.setup.canBegin, true);
   assert.equal(result.status.setup.canExport, true);
+  assert.equal(result.status.migrationRequired, false);
   assert.equal(trackerCalls, 0);
   await handler({ type: 'continuity_reprocess', chatId: 'chat' }, 'user');
   assert.equal(trackerCalls, 0, 'Reprocessing the imported anchor never calls the tracker');
@@ -180,7 +219,7 @@ test('backend imports, begins, reloads, forks, and exports the initial state aft
   assert.equal((await call('continuity_import_setup', { fileText: raw, fingerprint: fingerprint() })).ok, false);
   assert.equal(chats.get('chat').length, 2);
   const originalExport = await call('continuity_export_setup');
-  assert.deepEqual(JSON.parse(originalExport.fileText), setupFile());
+  assert.deepEqual(JSON.parse(originalExport.fileText), expectedSetup);
   assert.equal((await call('continuity_begin_setup')).ok, true);
   assert.equal(beginCalls, 1);
   assert.equal((await call('continuity_begin_setup')).ok, false);

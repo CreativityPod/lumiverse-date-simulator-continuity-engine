@@ -11,6 +11,7 @@ import {
   importedSetupForMessage,
   initialSetupForBranch,
   isImportSetupSelection,
+  isSupportedProfile,
   validateSetupFile,
   contentToText,
   buildSurpriseMeSample,
@@ -343,7 +344,7 @@ function readiness(config) {
   return {
     level: "green",
     code: "ready",
-    text: "Continuity Engine ready. Open a compatible Date Simulator or Story Teller chat to begin tracking.",
+    text: "Continuity Engine ready. Open a compatible Date Simulator or Storyteller chat to begin tracking.",
   };
 }
 
@@ -508,7 +509,7 @@ async function statusPayload(chatId, options = {}) {
     payload.text = "Continuity Engine active. Private profile saved; scene and arc tracking are automatic.";
   } else if (base.level === "green") {
     payload.code = "ready_no_profile";
-    payload.text = "Continuity Engine ready. No compatible Date Simulator or Story Teller private profile was found in this chat yet.";
+    payload.text = "Continuity Engine ready. No compatible Date Simulator or Storyteller private profile was found in this chat yet.";
   }
   if (options.includePrivate) payload.state = store.current;
   return payload;
@@ -642,7 +643,7 @@ async function reconcileChat(chatId, options = {}, userId) {
   await mirrorStore(chatId, store, context);
   await publishStatus(chatId, {}, scopedUserId);
 
-  const nativeCurrent = /\b(?:Date Simulator\s+v1\.(?:4(?:\.\d+)?|5(?:\.\d+)?)|Story Teller\s+v1\.6(?:\.\d+)?)\b/i.test(context.caseText);
+  const nativeCurrent = isSupportedProfile(context.caseText);
   if (!nativeCurrent && !store.migrationAccepted && !options.allowMigration) {
     store.migrationRequired = true;
     store.processing = false;
