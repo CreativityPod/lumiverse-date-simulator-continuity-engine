@@ -19,7 +19,7 @@ For v1.5.5 Surprise Me setup, it also injects one deterministic branch-stable ca
 3. Open the **Continuity** drawer and optionally select a tracker connection and structured-output mode. With no selection, the active default connection and automatic provider detection are used.
 4. Import the companion matching the card version so the private-profile warning card and reset action render correctly.
 
-## Save and load an initial setup (v1.4.7)
+## Save and load an initial setup (v1.4.8)
 
 Use a supported card, its matching persistent-state companion, and a Lumiverse host with `ctx.uploads.pickFile` and `spindle.chat.appendMessage` with generation support. The implementation follows the local Lumiverse 1.1.6 APIs. The existing permissions are sufficient.
 
@@ -80,7 +80,7 @@ Returning Home hides the floating widget, clears the drawer's chat snapshot and 
 ## Troubleshooting
 
 - If the tracker menu shows only **Active default connection**, use **Refresh Connections** and read the diagnostic directly below the menu. Named profiles require the extension's `generation` permission; the active default remains a valid automatic choice.
-- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.4.7 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
+- If a profile card remains in its checking/no-engine fallback after updating, confirm Continuity Engine v1.4.8 and the card's current persistent-state companion are installed. Version 1.2.2 and later detect and update profile cards inside Lumiverse's open Shadow DOM HTML islands; no extra chat turn or manual click should be required.
 - After updating, verify that `generation`, `interceptor`, and `chat_mutation` are all granted and that tracking is enabled. Grant `ui_panels` if the optional floating status widget is enabled. Tracking being enabled does not itself grant those permissions.
 - Tracker output may be configured from 400 through 8,192 tokens; the fresh-install default is 4,096 tokens. Tracker timeouts may be configured from 5 through 300 seconds; the fresh-install default is 120 seconds. The manifest gives prompt reconciliation the host's maximum five-minute interceptor budget. A 300-second request can consume that entire budget, so the default leaves room for the tracker's single permitted repair and overhead.
 - Version 1.0.3 forwards the Lumiverse user scope through connection lookup and background generation, which is required when the extension is installed in operator scope.
@@ -108,6 +108,7 @@ Returning Home hides the floating widget, clears the drawer's chat snapshot and 
 - Version 1.3.7 deletes chat sidecars after Lumiverse confirms chat deletion, prevents unrelated or inactive chats from creating new inert sidecars, and adds a two-step drawer cleanup action that safely removes orphaned and never-used tracking files while retaining malformed, changing, and historical stores.
 - Version 1.3.8 inherits the exact validated checkpoint prefix when Lumiverse forks a chat, remaps every canonical source ID and checkpoint fingerprint to the copied branch messages, and prevents a normal branch from replaying one tracker request per historical turn.
 
+- Version 1.4.8 raises scene basics, spatial fields, lifecycle reasons, and private-response fields to 1,000 characters each and NPC descriptive fields to 700, preserving the existing import behavior and profile recognition.
 - Version 1.4.7 adds native Story Teller v1.6 prompt and profile support while preserving Date Simulator v1.4/v1.5 setup imports and legacy file/state identifiers.
 - Version 1.4.6 raises the fresh-install tracker output default to 4,096 tokens and its configurable ceiling to 8,192 tokens, while raising the tracker timeout default to 120 seconds and its configurable ceiling to 300 seconds.
 - Version 1.4.5 persists both floating-widget coordinates across browser page refreshes and uses the profile-status warning orange while the Continuity Engine is updating.
