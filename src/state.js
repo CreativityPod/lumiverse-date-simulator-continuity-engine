@@ -33,6 +33,13 @@ export const MAX_SETUP_BYTES = 256 * 1024;
 export const IMPORT_LOADED_TEXT = "Saved setup loaded. Use Begin Simulation in the Continuity drawer, or type /begin to present the starting scene.";
 export const BEGIN_SETUP_TEXT = "/begin";
 
+// Profile identity is stored in CASE, independently of the visible card name.
+// Share this check between portable imports and native-state reconciliation.
+export function isSupportedProfile(body) {
+  const header = normalizeNewlines(body).trim().split("\n", 1)[0];
+  return /(?:\bDate Simulator\s+v1\.(?:4|5)(?:\.\d+)?\b|\bStoryteller\s+v1\.6(?:\.\d+)?\b)/i.test(header);
+}
+
 // Portable provenance names the baseline, never the source chat or its messages.
 export function assignSetupSources(value, sourceId) {
   if (Array.isArray(value)) return value.map((child) => assignSetupSources(child, sourceId));
@@ -59,8 +66,8 @@ export function validateSetupFile(input) {
     if (typeof value.profile !== "string") throw new Error("Setup profile must be text.");
     const profile = validateCaseCapsuleDetailed(value.profile);
     if (!profile.value) throw new Error(profile.error);
-    if (!/(?:\bDate Simulator v1\.(?:4|5)(?:\.\d+)?\b|\bStory Teller v1\.6(?:\.\d+)?\b)/.test(profile.value.split("\n")[0])) {
-      throw new Error("This setup requires a Date Simulator v1.4/v1.5 or Story Teller v1.6 profile.");
+    if (!isSupportedProfile(profile.value)) {
+      throw new Error("This setup requires a Date Simulator v1.4/v1.5 or Storyteller v1.6 identity in its CASE profile header. The visible card name does not change a saved file's profile identity.");
     }
     if (/<\/?[a-z][^>]*>/i.test(profile.value)) throw new Error("Setup profile must not contain markup.");
     if (trackerSourceMessageIds(value.initialState).some((id) => id !== "initial-setup")) {
@@ -77,10 +84,17 @@ export function validateSetupFile(input) {
   }
 }
 
-export function importedSetupForMessage(message) {
+function importedSetupResultForMessage(message) {
   if (message?.role !== "assistant" || contentToText(message.content) !== IMPORT_LOADED_TEXT) return null;
   const saved = message.metadata?.date_simulator_setup;
-  return saved ? validateSetupFile(saved).value : null;
+  return saved ? validateSetupFile(saved) : {
+    value: null,
+    error: "The import confirmation has no saved setup metadata. Import the JSON again in a new or reset chat.",
+  };
+}
+
+export function importedSetupForMessage(message) {
+  return importedSetupResultForMessage(message)?.value ?? null;
 }
 
 export function isImportSetupSelection(messages) {
@@ -477,8 +491,12 @@ export function deriveTranscriptContext(messages) {
     if (!text) continue;
 
     const markers = [];
-    const imported = importedSetupForMessage(message);
-    if (imported) markers.push({ kind: "case", at: -1, body: imported.profile });
+    const importedResult = importedSetupResultForMessage(message);
+    if (importedResult?.value) {
+      markers.push({ kind: "case", at: -1, body: importedResult.value.profile });
+    } else if (importedResult) {
+      markers.push({ kind: "invalidImport", at: -1, error: importedResult.error });
+    }
     for (const match of text.matchAll(new RegExp(CASE_PATTERN.source, CASE_PATTERN.flags))) {
       markers.push({ kind: "case", at: match.index ?? 0, body: match[1] });
     }
@@ -500,6 +518,11 @@ export function deriveTranscriptContext(messages) {
         caseMessageIndex = -1;
         legacySceneText = null;
         invalidCaseMessageId = null;
+        caseError = "";
+      } else if (marker.kind === "invalidImport") {
+        invalidCases += 1;
+        caseError = `The saved setup in this chat is invalid: ${marker.error}`;
+        invalidCaseMessageId = String(message.id ?? "");
       } else if (marker.kind === "case") {
         const validation = validateCaseCapsuleDetailed(marker.body);
         if (!validation.value) {

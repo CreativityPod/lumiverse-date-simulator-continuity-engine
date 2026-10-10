@@ -3,8 +3,10 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 import { setup, SETUP_FILENAME, cardsInside } from "../src/frontend.js";
+import { cloneEmptyState } from "../src/schemas.js";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/date-simulator-v1.5.6-setup.json", import.meta.url)));
+const storyFixture = JSON.parse(await readFile(new URL("./fixtures/storyteller-v1.6.0-setup.json", import.meta.url)));
 const fileText = JSON.stringify({ format: "date-simulator-initial-setup", version: 1, profile: fixture.profile, initialState: { private: "é & < >" } });
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -80,6 +82,7 @@ function mount(t, { secure = true, savePicker, pickFile = async () => [], hostCh
   };
   return {
     window, root, messages, sent, status, result, button,
+    receive: payload => receive(payload),
     drawerRegistrations: () => drawerRegistrations,
     floatWidgetOptions: () => floatWidgetOptions,
     widgetVisible: () => [...window.document.querySelectorAll(".test-float-widget")].some(widget => !widget.hidden),
@@ -228,6 +231,48 @@ test("the release greeting has a visible outlined button that opens the import p
   assert.equal(calls, 1);
   await tick();
   assert.match(h.root.textContent, /File selection canceled/);
+});
+
+test("Storyteller greeting selection shows Begin Simulation after an accepted import", async t => {
+  const selected = JSON.stringify({ format: "date-simulator-initial-setup", version: 1,
+    profile: storyFixture.profile, initialState: cloneEmptyState() });
+  const bytes = new TextEncoder().encode(selected);
+  const h = mount(t, { pickFile: async () => [{ name: "story.json", sizeBytes: bytes.byteLength, bytes }] });
+  h.status({ caseMessageId: null, profileSaved: false, code: "ready_no_profile",
+    setup: { canImport: true, canExport: false, canBegin: false, fingerprint: "startup" } });
+  assert.equal(h.button("Begin Simulation").hidden, true);
+  const host = h.window.document.createElement("div");
+  h.window.document.body.append(host);
+  const shadow = host.attachShadow({ mode: "open" });
+  shadow.innerHTML = storyFixture.importButtonHtml;
+  shadow.querySelector("button.ds-import-setup").click();
+  await tick();
+  const request = h.sent.findLast(message => message.type === "continuity_import_setup");
+  assert.ok(request);
+  assert.equal(request.fileText, selected);
+  h.receive({ type: "continuity_setup_result", requestId: request.requestId, chatId: request.chatId,
+    ok: true, message: "Setup loaded. Select Begin Simulation to present the starting scene.",
+    status: { type: "continuity_status", chatId: request.chatId, code: "ready", level: "green",
+      text: "Ready", config: {}, setup: { canImport: false, canExport: true, canBegin: true } } });
+  assert.equal(h.button("Begin Simulation").hidden, false);
+  assert.equal(h.button("Begin Simulation").disabled, false);
+  assert.equal(h.button("Import Setup — Choose File").disabled, true);
+  h.button("Begin Simulation").click();
+  assert.equal(h.sent.at(-1).type, "continuity_begin_setup");
+});
+
+test("rejected Storyteller setup displays the import error and permits another file selection", async t => {
+  const bytes = new TextEncoder().encode("{}");
+  const h = mount(t, { pickFile: async () => [{ sizeBytes: bytes.byteLength, bytes }] });
+  h.status();
+  h.button("Import Setup — Choose File").click();
+  await tick();
+  const request = h.sent.findLast(message => message.type === "continuity_import_setup");
+  h.receive({ type: "continuity_setup_result", requestId: request.requestId, chatId: request.chatId,
+    ok: false, message: "This setup requires a supported CASE profile header." });
+  assert.match(h.root.textContent, /supported CASE profile header/);
+  assert.equal(h.button("Begin Simulation").hidden, true);
+  assert.equal(h.button("Import Setup — Choose File").disabled, false);
 });
 
 test("native export can save repeatedly in one chat and after switching chats", async t => {

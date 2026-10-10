@@ -171,7 +171,7 @@ test("projects complete private state into compact prompt text without provenanc
   assert.doesNotMatch(projected, /WEATHER|Unknown|npcs|\{\}|\[\]/);
 });
 
-test("recognizes v1.5 and Story Teller v1.6 prompts without promoting prompt-only examples", () => {
+test("recognizes v1.5 and Storyteller v1.6 prompts without promoting prompt-only examples", () => {
   const messages = [
     { role: "system", content: "<date_simulator_version>1.5.1</date_simulator_version>" },
     { role: "assistant", content: `Example only.\n${caseEnvelope}` },
