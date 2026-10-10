@@ -38,6 +38,74 @@ test("accepts the documented minimal scene and arc schema", () => {
   assert.equal(Object.hasOwn(state.scene, "womanStable"), true);
 });
 
+test("accepts expanded text ceilings and enforces each boundary during recovery", () => {
+  const paths = [
+    ...["date", "time", "weather", "location", "immediateContext"]
+      .map((key) => [["scene", key], 1_000]),
+    ...Object.keys(cloneEmptyState().scene.spatial)
+      .map((key) => [["scene", "spatial", key], 1_000]),
+    [["scene", "lifecycle", "reason"], 1_000],
+    [["arc", "lifecycle", "reason"], 1_000],
+    ...Object.keys(cloneEmptyState().arc.response)
+      .filter((key) => key !== "sourceMessageId")
+      .map((key) => [["arc", "response", key], 1_000]),
+    ...["role", "relationship", "currentStatus", "immediateObjective"]
+      .map((key) => [["arc", "npcs", 0, key], 700]),
+    [["arc", "npcs", 0, "name"], 120],
+    ...Object.keys(cloneEmptyState().scene.manVisible)
+      .map((key) => [["scene", "manVisible", key], 700]),
+  ];
+  const read = (value, path) => path.reduce((part, key) => part[key], value);
+  for (const [path, maximumLength] of paths) {
+    const state = cloneEmptyState();
+    state.scene.lifecycle.sourceMessageId = "current";
+    state.arc.lifecycle.sourceMessageId = "current";
+    state.arc.response.latestChange = "Established change.";
+    state.arc.response.sourceMessageId = "current";
+    state.arc.npcs = [{
+      name: "Nia", role: "Friend", relationship: "Neighbor",
+      currentStatus: "Present", immediateObjective: "Talk", sourceMessageId: "current",
+    }];
+    const parent = read(state, path.slice(0, -1));
+    const key = path.at(-1);
+    parent[key] = "x".repeat(maximumLength);
+    const options = { sourceMessageId: "current" };
+    const label = path.join(".");
+    assert.ok(validateTrackerStateDetailed(state, options).state, label);
+    const accepted = recoverTrackerStateDetailed(state, options);
+    assert.ok(accepted.state, label);
+    assert.equal(read(accepted.state, path), parent[key], label);
+    assert.deepEqual(accepted.warnings, [], label);
+
+    parent[key] += "x";
+    assert.match(validateTrackerStateDetailed(state, options).error,
+      new RegExp(`maximum is ${maximumLength}`), label);
+    const recovered = recoverTrackerStateDetailed(state, options);
+    assert.ok(recovered.state, label);
+    if (key === "reason") {
+      assert.equal(read(recovered.state, path), "", label);
+      assert.match(recovered.warnings.join("; "), /preserved the previous .* lifecycle/, label);
+    } else {
+      assert.equal(read(recovered.state, path), "x".repeat(maximumLength), label);
+      assert.match(recovered.warnings.join("; "),
+        new RegExp(`truncated to ${maximumLength} characters`), label);
+    }
+  }
+});
+
+test("materializes a 1000-character response update summary without reverting its update", () => {
+  const candidate = trackerStateForLlm(cloneEmptyState());
+  candidate.arc.response.personalInterest = "Established interest.";
+  candidate.arc.response.latestChange = "x".repeat(1_000);
+  candidate.arc.response.action = "update";
+  const result = recoverTrackerOutputDetailed(candidate, { sourceMessageId: "current" });
+  assert.ok(result.state);
+  assert.equal(result.state.arc.response.personalInterest, "Established interest.");
+  assert.equal(result.state.arc.response.latestChange, candidate.arc.response.latestChange);
+  assert.equal(result.state.arc.response.sourceMessageId, "current");
+  assert.deepEqual(result.warnings, []);
+});
+
 test("rejects extra fields, oversized objectives, and forged source ids", () => {
   const extra = cloneEmptyState();
   extra.scene.unexpected = "unsafe";

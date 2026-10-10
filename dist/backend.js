@@ -222,7 +222,7 @@ function normalizeLifecycleDetailed(value, allowedSourceMessageIds, path) {
   if (!LIFECYCLE_STATUSES.has(value.status)) {
     return { value: null, error: `${path}.status must be active or ended` };
   }
-  const reasonError = textValidationError(value.reason, 700, `${path}.reason`, { allowEmpty: true });
+  const reasonError = textValidationError(value.reason, 1_000, `${path}.reason`, { allowEmpty: true });
   if (reasonError) return { value: null, error: reasonError };
   const sourceError = textValidationError(
     value.sourceMessageId,
@@ -233,7 +233,7 @@ function normalizeLifecycleDetailed(value, allowedSourceMessageIds, path) {
   if (sourceError) return { value: null, error: sourceError };
   const normalized = {
     status: value.status,
-    reason: cleanText(value.reason, 700, { allowEmpty: true }),
+    reason: cleanText(value.reason, 1_000, { allowEmpty: true }),
     sourceMessageId: cleanText(value.sourceMessageId, 200, { allowEmpty: true }),
   };
   if (normalized.status === "ended" && !normalized.reason) {
@@ -255,7 +255,7 @@ function normalizeNpcDetailed(value, allowedSourceMessageIds, path = "arc.npcs[]
   if (keyError) return { value: null, error: keyError };
   const normalized = {};
   for (const key of NPC_KEYS) {
-    const maximumLength = key === "name" ? 120 : 500;
+    const maximumLength = key === "name" ? 120 : key === "sourceMessageId" ? 500 : 700;
     const allowEmpty = key === "sourceMessageId";
     const error = textValidationError(value[key], maximumLength, `${path}.${key}`, { allowEmpty });
     if (error) return { value: null, error };
@@ -376,9 +376,9 @@ function validateTrackerStateDetailed(candidate, options = {}) {
   normalized.scene.lifecycle = sceneLifecycle.value;
   normalized.arc.lifecycle = arcLifecycle.value;
   for (const key of ["date", "time", "weather", "location", "immediateContext"]) {
-    const error = textValidationError(candidate.scene[key], 700, `scene.${key}`);
+    const error = textValidationError(candidate.scene[key], 1_000, `scene.${key}`);
     if (error) return fail(error);
-    const cleaned = cleanText(candidate.scene[key], 700);
+    const cleaned = cleanText(candidate.scene[key], 1_000);
     normalized.scene[key] = cleaned;
   }
   for (const key of WOMAN_STABLE_KEYS) {
@@ -399,9 +399,9 @@ function validateTrackerStateDetailed(candidate, options = {}) {
     normalized.scene.manVisible[key] = cleanText(candidate.scene.manVisible[key], 700);
   }
   for (const key of SPATIAL_KEYS) {
-    const error = textValidationError(candidate.scene.spatial[key], 700, `scene.spatial.${key}`);
+    const error = textValidationError(candidate.scene.spatial[key], 1_000, `scene.spatial.${key}`);
     if (error) return fail(error);
-    normalized.scene.spatial[key] = cleanText(candidate.scene.spatial[key], 700);
+    normalized.scene.spatial[key] = cleanText(candidate.scene.spatial[key], 1_000);
   }
 
   if (!Array.isArray(candidate.arc.npcs) || candidate.arc.npcs.length > 24) {
@@ -432,9 +432,10 @@ function validateTrackerStateDetailed(candidate, options = {}) {
 
   for (const key of RESPONSE_KEYS) {
     const allowEmpty = key === "latestChange" || key === "sourceMessageId";
-    const error = textValidationError(candidate.arc.response[key], 700, `arc.response.${key}`, { allowEmpty });
+    const maximumLength = key === "sourceMessageId" ? 700 : 1_000;
+    const error = textValidationError(candidate.arc.response[key], maximumLength, `arc.response.${key}`, { allowEmpty });
     if (error) return fail(error);
-    const cleaned = cleanText(candidate.arc.response[key], 700, { allowEmpty });
+    const cleaned = cleanText(candidate.arc.response[key], maximumLength, { allowEmpty });
     normalized.arc.response[key] = cleaned;
   }
   if (
@@ -737,7 +738,7 @@ function materializeTrackerOutputDetailed(candidate, options = {}) {
     canonicalKeys: RESPONSE_KEYS,
     sourceMessageId,
     warnings,
-    latestChangeMaximum: 700,
+    latestChangeMaximum: 1_000,
   });
   materialized.arc.objectives = materializeListOutput({
     value: candidate.arc.objectives,
@@ -788,12 +789,12 @@ function recoverTrackerStateDetailed(candidate, options = {}) {
   noteExtras(candidate.arc, ARC_KEYS, "arc");
 
   for (const key of ["date", "time", "weather", "location", "immediateContext"]) {
-    const recovered = recoverText(candidate.scene[key], 700);
+    const recovered = recoverText(candidate.scene[key], 1_000);
     if (recovered === null) {
       warnings.push(`scene.${key} was invalid; preserved the previous value`);
     } else {
-      if (String(candidate.scene[key]).trim().length > 700) {
-        warnings.push(`scene.${key} was oversized and was truncated to 700 characters`);
+      if (String(candidate.scene[key]).trim().length > 1_000) {
+        warnings.push(`scene.${key} was oversized and was truncated to 1000 characters`);
       }
       normalized.scene[key] = recovered;
       usableParts += 1;
@@ -848,9 +849,9 @@ function recoverTrackerStateDetailed(candidate, options = {}) {
     }
   }
 
-  for (const [section, keys] of [
-    ["manVisible", MAN_VISIBLE_KEYS],
-    ["spatial", SPATIAL_KEYS],
+  for (const [section, keys, maximumLength] of [
+    ["manVisible", MAN_VISIBLE_KEYS, 700],
+    ["spatial", SPATIAL_KEYS, 1_000],
   ]) {
     if (!isPlainObject(candidate.scene[section])) {
       warnings.push(`scene.${section} was invalid; preserved the previous section`);
@@ -858,12 +859,12 @@ function recoverTrackerStateDetailed(candidate, options = {}) {
     }
     noteExtras(candidate.scene[section], keys, `scene.${section}`);
     for (const key of keys) {
-      const recovered = recoverText(candidate.scene[section][key], 700);
+      const recovered = recoverText(candidate.scene[section][key], maximumLength);
       if (recovered === null) {
         warnings.push(`scene.${section}.${key} was invalid; preserved the previous value`);
       } else {
-        if (String(candidate.scene[section][key]).trim().length > 700) {
-          warnings.push(`scene.${section}.${key} was oversized and was truncated to 700 characters`);
+        if (String(candidate.scene[section][key]).trim().length > maximumLength) {
+          warnings.push(`scene.${section}.${key} was oversized and was truncated to ${maximumLength} characters`);
         }
         normalized.scene[section][key] = recovered;
         usableParts += 1;
@@ -898,7 +899,7 @@ function recoverTrackerStateDetailed(candidate, options = {}) {
       if (npcExtras.length) warnings.push(`arc.npcs[${index}] ignored unexpected fields: ${npcExtras.join(", ")}`);
       const recoveredNpc = {};
       for (const key of NPC_KEYS) {
-        const maximumLength = key === "name" ? 120 : 500;
+        const maximumLength = key === "name" ? 120 : key === "sourceMessageId" ? 500 : 700;
         const allowEmpty = key === "sourceMessageId";
         const value = recoverText(npc[key], maximumLength, { allowEmpty });
         if (value === null) {
@@ -969,12 +970,13 @@ function recoverTrackerStateDetailed(candidate, options = {}) {
     const recoveredResponse = { ...normalized.arc.response };
     for (const key of RESPONSE_KEYS) {
       const allowEmpty = key === "latestChange" || key === "sourceMessageId";
-      const recovered = recoverText(candidate.arc.response[key], 700, { allowEmpty });
+      const maximumLength = key === "sourceMessageId" ? 700 : 1_000;
+      const recovered = recoverText(candidate.arc.response[key], maximumLength, { allowEmpty });
       if (recovered === null) {
         warnings.push(`arc.response.${key} was invalid; preserved the previous value`);
       } else {
-        if (String(candidate.arc.response[key]).trim().length > 700) {
-          warnings.push(`arc.response.${key} was oversized and was truncated to 700 characters`);
+        if (String(candidate.arc.response[key]).trim().length > maximumLength) {
+          warnings.push(`arc.response.${key} was oversized and was truncated to ${maximumLength} characters`);
         }
         recoveredResponse[key] = recovered;
       }
